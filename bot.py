@@ -47,6 +47,7 @@ from telegram.ext import (
     CommandHandler,
     CallbackQueryHandler,
     MessageHandler,
+    ChatMemberHandler,
     ContextTypes,
     filters,
 )
@@ -140,10 +141,26 @@ CONFIG["admin_ids"] = ADMIN_IDS
 PRODUCT_NAME: str = os.getenv("PRODUCT_NAME") or CONFIG.get("product_name", "Pro Access Vault - Course Edition")
 CONFIG["product_name"] = PRODUCT_NAME
 
-CHANNELS: List[Dict[str, Any]] = CONFIG.get("channels", [])
-for ch in CHANNELS:
-    if "type" not in ch:
-        ch["type"] = "channel"
+# Synchronize VIP Channels from SQLite Database (Immortal Storage across Docker / Git updates)
+try:
+    db_channels = db.get_all_channels()
+    if db_channels:
+        CHANNELS: List[Dict[str, Any]] = db_channels
+        CONFIG["channels"] = CHANNELS
+    else:
+        CHANNELS: List[Dict[str, Any]] = CONFIG.get("channels", [])
+        for ch in CHANNELS:
+            if "type" not in ch:
+                ch["type"] = "channel"
+            db.add_or_update_channel(
+                ch["id"],
+                ch.get("name", str(ch["id"])),
+                ch.get("type", "channel"),
+                ch.get("invite_expire_hours", 24)
+            )
+except Exception as e:
+    logger.error(f"Failed to synchronize channels from SQLite DB: {e}")
+    CHANNELS = CONFIG.get("channels", [])
 
 PLANS: Dict[str, Any] = CONFIG.get("plans", {})
 PAYMENT_INFO: Dict[str, str] = CONFIG.get("payment_info", {})
@@ -173,15 +190,31 @@ USER_STATES: Dict[int, Dict[str, Any]] = {}
 
 
 def save_config():
-    """Persists in-memory channels, payment settings, and force channel to config.json."""
+    """Persists channels to both SQLite DB and config.json so they are NEVER lost."""
+    global CHANNELS
+    for ch in CHANNELS:
+        try:
+            db.add_or_update_channel(
+                ch["id"],
+                ch.get("name", str(ch["id"])),
+                ch.get("type", "channel"),
+                ch.get("invite_expire_hours", 24)
+            )
+        except Exception as e:
+            logger.error(f"Failed to persist channel {ch.get('id')} to SQLite DB: {e}")
+
     CONFIG["channels"] = CHANNELS
     CONFIG["payment_info"] = PAYMENT_INFO
     CONFIG["force_channel_id"] = FORCE_CHANNEL_ID
     CONFIG["force_channel_link"] = FORCE_CHANNEL_LINK
     CONFIG["force_channel_name"] = FORCE_CHANNEL_NAME
-    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-        json.dump(CONFIG, f, indent=2)
-    logger.info("Configuration saved successfully to config.json")
+    try:
+        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+            json.dump(CONFIG, f, indent=2)
+        logger.info("Configuration saved successfully to config.json & SQLite DB")
+    except Exception as e:
+        logger.error(f"Failed to write config.json: {e}")
+
 
 
 def is_admin(user_id: int) -> bool:
@@ -607,6 +640,7 @@ async def cmd_myplan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔗 Access VIP Channels & Groups", callback_data="get_my_links")],
         [InlineKeyboardButton("🔄 Renew Subscription", callback_data="user_renew")],
         [InlineKeyboardButton("🔙 Back to Main Menu", callback_data="main_menu")],
     ])
@@ -614,6 +648,25 @@ async def cmd_myplan(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.callback_query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
     elif update.message:
         await update.message.reply_text(text, parse_mode="HTML", reply_markup=markup)
+
+
+async def cmd_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Allows active VIP members to retrieve or refresh their 1-time channel invite links anytime."""
+    user_id = update.effective_user.id
+    sub = db.get_subscriber(user_id)
+    if sub and sub.get("status") == "active":
+        await deliver_welcome_access(
+            context.bot,
+            user_id,
+            sub["plan_name"],
+            sub["expires_at"],
+            sub["is_lifetime"]
+        )
+    else:
+        await update.message.reply_text(
+            "❌ <b>আপনার কোনো সক্রিয় VIP মেম্বারশিপ নেই!</b>\n\nপ্ল্যান দেখতে /plans লিখুন।",
+            parse_mode="HTML"
+        )
 
 
 # =============================================================================
@@ -1659,6 +1712,7 @@ async def cmd_delchannel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         ch_id = int(args[0])
         initial_len = len(CHANNELS)
+        db.delete_channel(ch_id)
         CHANNELS[:] = [ch for ch in CHANNELS if ch["id"] != ch_id]
 
         if len(CHANNELS) < initial_len:
@@ -1807,6 +1861,49 @@ async def cmd_setforcechannel(update: Update, context: ContextTypes.DEFAULT_TYPE
     )
 
 
+async def handle_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Automatically registers any VIP Channel or Group when the bot is promoted to Admin."""
+    chat = update.effective_chat
+    if not update.my_chat_member or not update.my_chat_member.new_chat_member:
+        return
+
+    new_member = update.my_chat_member.new_chat_member
+    is_now_admin = new_member.status in ("administrator", "creator")
+    if is_now_admin and chat:
+        chat_type = "channel" if chat.type == "channel" else "group"
+        chat_id = chat.id
+        chat_title = chat.title or f"{chat_type.title()} {chat_id}"
+
+        # Do not auto-register if it's the force join channel itself
+        if str(chat_id) == str(FORCE_CHANNEL_ID):
+            return
+
+        existing = [c for c in CHANNELS if c["id"] == chat_id]
+        if not existing:
+            db.add_or_update_channel(chat_id, chat_title, chat_type, invite_expire_hours=24)
+            CHANNELS.append({
+                "id": chat_id,
+                "name": chat_title,
+                "type": chat_type,
+                "invite_expire_hours": 24,
+            })
+            save_config()
+            logger.info(f"Auto-registered new {chat_type}: {chat_title} ({chat_id}) into VIP Database.")
+
+            notify_text = (
+                f"🎉 <b>VIP {chat_type.title()} Auto-Registered!</b>\n\n"
+                f"📢 <b>Title:</b> {chat_title}\n"
+                f"🆔 <b>ID:</b> <code>{chat_id}</code>\n"
+                f"⚙️ <b>Type:</b> <code>{chat_type}</code>\n"
+                f"🚀 <i>The bot is administrator. This destination is now permanently saved in SQLite DB and ready for 1-time invite links!</i>"
+            )
+            for adm in ADMIN_IDS:
+                try:
+                    await context.bot.send_message(chat_id=adm, text=notify_text, parse_mode="HTML")
+                except Exception:
+                    pass
+
+
 # =============================================================================
 # CALLBACK QUERY ROUTER (Inline Button Actions)
 # =============================================================================
@@ -1909,6 +2006,21 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     if data == "payment_info":
         await query.answer()
         await send_payment_info(update, context)
+        return
+
+    if data == "get_my_links":
+        sub = db.get_subscriber(user_id)
+        if sub and sub.get("status") == "active":
+            await query.answer("Fetching your secure 1-time invite links...")
+            await deliver_welcome_access(
+                context.bot,
+                user_id,
+                sub["plan_name"],
+                sub["expires_at"],
+                sub["is_lifetime"]
+            )
+        else:
+            await query.answer("❌ আপনার কোনো সক্রিয় VIP মেম্বারশিপ নেই!", show_alert=True)
         return
 
     # Plan Selection Callbacks
@@ -2298,6 +2410,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
 
     if data.startswith("adm_confirm_del_ch_"):
         ch_id = int(data.replace("adm_confirm_del_ch_", ""))
+        db.delete_channel(ch_id)
         CHANNELS[:] = [ch for ch in CHANNELS if ch["id"] != ch_id]
         save_config()
         await query.answer("Destination removed!", show_alert=True)
@@ -2459,6 +2572,7 @@ async def post_init(application: Application):
         await application.bot.set_my_commands([
             BotCommand("start", "🚀 Main Menu & Plans"),
             BotCommand("myplan", "👤 My Subscription Status"),
+            BotCommand("links", "🔗 Access VIP Channels & Groups"),
             BotCommand("cancel", "❌ Cancel Current Action"),
             BotCommand("admin", "⚙️ Admin Control Panel"),
         ])
@@ -2504,6 +2618,7 @@ def main():
     # User Commands
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("myplan", cmd_myplan))
+    app.add_handler(CommandHandler("links", cmd_links))
     app.add_handler(CommandHandler("plans", render_plans_menu))
     app.add_handler(CommandHandler("payment", send_payment_info))
     app.add_handler(CommandHandler("cancel", cmd_cancel))
@@ -2525,11 +2640,17 @@ def main():
     app.add_handler(CommandHandler("setpayment", cmd_setpayment))
     app.add_handler(CommandHandler("setforcechannel", cmd_setforcechannel))
 
+    # Channel & Group Automatic Addition Hook
+    app.add_handler(ChatMemberHandler(handle_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER))
+
     # Callbacks and Text/Photo Handlers
     app.add_handler(CallbackQueryHandler(handle_callback_query))
     app.add_handler(MessageHandler((filters.TEXT | filters.PHOTO) & ~filters.COMMAND, handle_user_text_message))
 
-    app.run_polling(drop_pending_updates=True)
+    app.run_polling(
+        drop_pending_updates=True,
+        allowed_updates=["message", "callback_query", "chat_member", "my_chat_member"]
+    )
 
 
 if __name__ == "__main__":

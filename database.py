@@ -83,6 +83,17 @@ class Database:
                 );
             """)
 
+            # 4. VIP Channels & Discussion Groups Table (Immortal SQLite Storage)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS channels (
+                    id INTEGER PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    type TEXT NOT NULL DEFAULT 'channel',
+                    invite_expire_hours INTEGER NOT NULL DEFAULT 24,
+                    created_at TEXT NOT NULL
+                );
+            """)
+
             # Indexes for fast scheduler queries
             conn.execute("CREATE INDEX IF NOT EXISTS idx_subs_status ON subscribers(status);")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_subs_expires ON subscribers(expires_at);")
@@ -509,6 +520,38 @@ class Database:
             ).fetchall()
             return [dict(r) for r in rows]
 
+    # =========================================================================
+    # CHANNELS & GROUPS PERSISTENCE (Immortal SQLite Storage)
+    # =========================================================================
+    def add_or_update_channel(self, channel_id: int, name: str, channel_type: str = "channel", invite_expire_hours: int = 24):
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        with self._get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO channels (id, name, type, invite_expire_hours, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    name = excluded.name,
+                    type = excluded.type,
+                    invite_expire_hours = excluded.invite_expire_hours;
+                """,
+                (channel_id, name, channel_type, invite_expire_hours, now),
+            )
+            conn.commit()
+
+    def delete_channel(self, channel_id: int):
+        with self._get_connection() as conn:
+            conn.execute("DELETE FROM channels WHERE id = ?;", (channel_id,))
+            conn.commit()
+
+    def get_all_channels(self) -> List[Dict[str, Any]]:
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                "SELECT id, name, type, invite_expire_hours, created_at FROM channels ORDER BY type ASC, name ASC;"
+            ).fetchall()
+            return [dict(r) for r in rows]
+
 
 # Global shared instance
 db = Database()
+
