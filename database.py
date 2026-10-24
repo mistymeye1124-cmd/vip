@@ -17,13 +17,27 @@ from typing import Optional, Dict, Any, List, Tuple
 logger = logging.getLogger("vault_db")
 
 
+BASE_DIR = Path(__file__).resolve().parent
+
+
 class Database:
-    def __init__(self, db_path: str = "vault_database.db", backup_dir: str = "backups"):
-        self.db_path = Path(db_path)
+    def __init__(self, db_path: Optional[str] = None, backup_dir: Optional[str] = None):
+        if db_path is None:
+            self.db_path = BASE_DIR / "vault_database.db"
+        else:
+            p = Path(db_path)
+            self.db_path = p if p.is_absolute() else (BASE_DIR / p)
+
         if self.db_path.is_dir():
             # If Docker volume mounted non-existent file as directory, store db inside
             self.db_path = self.db_path / "vault.db"
-        self.backup_dir = Path(backup_dir)
+
+        if backup_dir is None:
+            self.backup_dir = BASE_DIR / "backups"
+        else:
+            p = Path(backup_dir)
+            self.backup_dir = p if p.is_absolute() else (BASE_DIR / p)
+
         self.backup_dir.mkdir(parents=True, exist_ok=True)
         self._init_db()
 

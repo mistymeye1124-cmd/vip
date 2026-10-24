@@ -96,12 +96,14 @@ live_log_buffer = LiveLogBuffer(maxlen=40)
 live_log_buffer.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S"))
 logging.getLogger().addHandler(live_log_buffer)
 
+BASE_DIR = Path(__file__).resolve().parent
+
 # Load Environment Variables (.env) with bulletproof fallback
 try:
     from dotenv import load_dotenv
-    load_dotenv()
+    load_dotenv(BASE_DIR / ".env")
 except ImportError:
-    env_file = Path(".env")
+    env_file = BASE_DIR / ".env"
     if env_file.exists():
         with open(env_file, "r", encoding="utf-8") as f:
             for line in f:
@@ -114,7 +116,7 @@ except ImportError:
                         os.environ[k] = v
 
 # Load Configuration
-CONFIG_PATH = Path("config.json")
+CONFIG_PATH = BASE_DIR / "config.json"
 if CONFIG_PATH.is_dir():
     CONFIG_PATH = CONFIG_PATH / "config.json"
 
@@ -975,10 +977,14 @@ async def handle_user_text_message(update: Update, context: ContextTypes.DEFAULT
             trx_id=trx_id,
         )
 
+        safe_trx = html.escape(trx_id)
+        safe_full_name = html.escape(user.full_name or "VIP Member")
+        safe_username = html.escape(user.username or "none")
+
         await update.message.reply_text(
             f"✅ <b>পেমেন্ট রিকোয়েস্ট সাবমিট হয়েছে! (ID: #{req_id})</b>\n\n"
             f"📦 <b>প্ল্যান:</b> {plan.get('name')}\n"
-            f"🔢 <b>প্রুফ / Trx ID:</b> <code>{trx_id}</code>\n\n"
+            f"🔢 <b>প্রুফ / Trx ID:</b> <code>{safe_trx}</code>\n\n"
             f"অ্যাডমিন ভেরিফাই করা মাত্রই আপনি এই বটের ইনবক্সে সমস্ত VIP চ্যানেলের ওয়ান-টাইম জয়েন লিংক পেয়ে যাবেন।",
             parse_mode="HTML",
         )
@@ -986,11 +992,11 @@ async def handle_user_text_message(update: Update, context: ContextTypes.DEFAULT
         # Alert Admins with Interactive Approval Card
         admin_card = (
             f"💳 <b>[NEW PAYMENT SUBMISSION #{req_id}]</b>\n\n"
-            f"👤 <b>User:</b> <a href='tg://user?id={user_id}'>{user.full_name}</a> (@{user.username or 'none'})\n"
+            f"👤 <b>User:</b> <a href='tg://user?id={user_id}'>{safe_full_name}</a> (@{safe_username})\n"
             f"🆔 <b>User ID:</b> <code>{user_id}</code>\n"
             f"📦 <b>Plan:</b> {plan.get('name')}\n"
             f"💰 <b>Amount:</b> {plan.get('price_bdt')} BDT / ${plan.get('price_usdt', 'N/A')} USDT\n"
-            f"🔢 <b>Trx ID / Note:</b> <code>{trx_id}</code>"
+            f"🔢 <b>Trx ID / Note:</b> <code>{safe_trx}</code>"
         )
 
         markup = InlineKeyboardMarkup([
@@ -2407,13 +2413,17 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             logger.error(f"Failed to deliver links to user {req['user_id']}: {e}")
 
         dispatch_status = "🚀 1-Time Invite Links dispatched to member's DM." if delivery_ok else "⚠️ Member added in DB, but failed to DM links (User may have blocked bot)."
+        safe_req_user = html.escape(str(req["username"] or "none"))
+        safe_req_trx = html.escape(str(req["trx_id"] or "N/A"))
+        safe_admin_name = html.escape(str(query.from_user.username or query.from_user.id))
+
         approved_text = (
             f"✅ <b>PAYMENT APPROVED (#{req_id})</b>\n\n"
-            f"👤 Member: <code>{req['user_id']}</code> (@{req['username'] or 'none'})\n"
+            f"👤 Member: <code>{req['user_id']}</code> (@{safe_req_user})\n"
             f"📦 Plan: <b>{plan['name']}</b>\n"
-            f"🔢 Trx: <code>{req['trx_id']}</code>\n"
+            f"🔢 Trx: <code>{safe_req_trx}</code>\n"
             f"{dispatch_status}\n"
-            f"👮 Approved by: @{query.from_user.username or query.from_user.id}"
+            f"👮 Approved by: @{safe_admin_name}"
         )
 
         try:
@@ -2437,20 +2447,22 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             return
 
         db.update_payment_status(req_id, "rejected")
+        safe_rej_trx = html.escape(str(req["trx_id"] or "N/A"))
         try:
             await context.bot.send_message(
                 chat_id=req["user_id"],
-                text=f"❌ Your payment submission (Trx: <code>{req['trx_id']}</code>) could not be verified by administration. Please contact support.",
+                text=f"❌ Your payment submission (Trx: <code>{safe_rej_trx}</code>) could not be verified by administration. Please contact support.",
                 parse_mode="HTML",
             )
         except Exception:
             pass
 
+        safe_admin_name = html.escape(str(query.from_user.username or query.from_user.id))
         rejected_text = (
             f"❌ <b>Payment Rejected (#{req_id})</b>\n"
             f"👤 Member: <code>{req['user_id']}</code>\n"
-            f"🔢 Trx: <code>{req['trx_id']}</code>\n"
-            f"👮 Action by: @{query.from_user.username or query.from_user.id}"
+            f"🔢 Trx: <code>{safe_rej_trx}</code>\n"
+            f"👮 Action by: @{safe_admin_name}"
         )
         try:
             if query.message.photo:
