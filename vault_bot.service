@@ -1,0 +1,15 @@
+[Unit]
+Description=Pro Access Vault VIP Bot Service
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/pro_access_vault_bot
+ExecStart=/root/pro_access_vault_bot/venv/bin/python bot.py
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

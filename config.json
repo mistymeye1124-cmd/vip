@@ -1,0 +1,66 @@
+{
+  "bot_token": "8788687833:AAEZHhZzoVdngT4npb09cTEme__ZCu8FAx8",
+  "admin_ids": [
+    8387415921
+  ],
+  "log_channel_id": null,
+  "force_channel_id": null,
+  "force_channel_link": null,
+  "force_channel_name": "Official Updates Channel",
+  "product_name": "Pro Access Vault - Course Edition",
+  "channels": [],
+  "plans": {
+    "monthly": {
+      "key": "monthly",
+      "name": "📅 Monthly Access",
+      "duration_days": 30,
+      "price_bdt": 1000,
+      "price_usdt": 10,
+      "is_lifetime": false,
+      "features": [
+        "Full access to Course Vault",
+        "Discussion & Support Group",
+        "Weekly Course Updates",
+        "30 Days Validity"
+      ]
+    },
+    "yearly": {
+      "key": "yearly",
+      "name": "📆 Yearly Access",
+      "duration_days": 365,
+      "price_bdt": 5000,
+      "price_usdt": 50,
+      "is_lifetime": false,
+      "features": [
+        "Full access to Course Vault",
+        "Discussion & Support Group",
+        "All updates for 365 days",
+        "Save 58% compared to monthly"
+      ]
+    },
+    "lifetime": {
+      "key": "lifetime",
+      "name": "👑 Lifetime Access",
+      "duration_days": 99999,
+      "price_bdt": 8000,
+      "price_usdt": 80,
+      "is_lifetime": true,
+      "features": [
+        "Forever unlimited access",
+        "Never expires, zero recurring fees",
+        "All current + future course topics",
+        "Highest VIP priority support"
+      ]
+    }
+  },
+  "payment_info": {
+    "bkash": "01XXXXXXXXX (Personal - Send Money)",
+    "nagad": "01XXXXXXXXX (Personal - Send Money)",
+    "binance_pay_id": "YOUR_BINANCE_PAY_ID",
+    "usdt_trc20": "YOUR_USDT_TRC20_ADDRESS"
+  },
+  "scheduler_interval_seconds": 60,
+  "reminder_hours_before": 24,
+  "db_path": "vault_database.db",
+  "backup_dir": "backups"
+}

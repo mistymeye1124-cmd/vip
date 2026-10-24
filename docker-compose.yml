@@ -1,0 +1,11 @@
+services:
+  vault_bot:
+    build: .
+    container_name: pro_access_vault_bot
+    restart: unless-stopped
+    volumes:
+      - ./config.json:/app/config.json
+      - ./vault_database.db:/app/vault_database.db
+      - ./backups:/app/backups
+    environment:
+      - TZ=UTC
