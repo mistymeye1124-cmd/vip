@@ -13,6 +13,7 @@ Main Application Runner with:
 import os
 import sys
 import re
+import html
 import json
 import logging
 import datetime
