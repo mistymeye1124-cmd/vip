@@ -19,6 +19,9 @@ logger = logging.getLogger("vault_db")
 class Database:
     def __init__(self, db_path: str = "vault_database.db", backup_dir: str = "backups"):
         self.db_path = Path(db_path)
+        if self.db_path.is_dir():
+            # If Docker volume mounted non-existent file as directory, store db inside
+            self.db_path = self.db_path / "vault.db"
         self.backup_dir = Path(backup_dir)
         self.backup_dir.mkdir(parents=True, exist_ok=True)
         self._init_db()

@@ -4,9 +4,9 @@
     8387415921
   ],
   "log_channel_id": null,
-  "force_channel_id": null,
-  "force_channel_link": null,
-  "force_channel_name": "Official Updates Channel",
+  "force_channel_id": "-1003665125374",
+  "force_channel_link": "https://t.me/PAV_CourseEdition",
+  "force_channel_name": "Pro Access Vault - Course Edition",
   "product_name": "Pro Access Vault - Course Edition",
   "channels": [],
   "plans": {
@@ -54,10 +54,10 @@
     }
   },
   "payment_info": {
-    "bkash": "01XXXXXXXXX (Personal - Send Money)",
-    "nagad": "01XXXXXXXXX (Personal - Send Money)",
-    "binance_pay_id": "YOUR_BINANCE_PAY_ID",
-    "usdt_trc20": "YOUR_USDT_TRC20_ADDRESS"
+    "bkash": "01718539406 (Agent - Cash Out Only)",
+    "nagad": "01718539406 (Agent - Cash Out Only)",
+    "binance_pay_id": "892612368",
+    "usdt_trc20": "TNPg8qkhm1xQsMNsgvH6p71tNwVXV7qaJe"
   },
   "scheduler_interval_seconds": 60,
   "reminder_hours_before": 24,

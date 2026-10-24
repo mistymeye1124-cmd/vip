@@ -76,7 +76,10 @@ except ImportError:
 
 # Load Configuration
 CONFIG_PATH = Path("config.json")
-if not CONFIG_PATH.exists():
+if CONFIG_PATH.is_dir():
+    CONFIG_PATH = CONFIG_PATH / "config.json"
+
+if not CONFIG_PATH.exists() or CONFIG_PATH.is_dir():
     CONFIG: Dict[str, Any] = {}
 else:
     with open(CONFIG_PATH, "r", encoding="utf-8") as f:
@@ -496,21 +499,34 @@ async def handle_buy_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, pl
     if not plan:
         return
 
+    bkash_num = PAYMENT_INFO.get("bkash", "01718539406")
+    nagad_num = PAYMENT_INFO.get("nagad", "01718539406")
+    binance_id = PAYMENT_INFO.get("binance_pay_id", "892612368")
+    usdt_addr = PAYMENT_INFO.get("usdt_trc20", "TNPg8qkhm1xQsMNsgvH6p71tNwVXV7qaJe")
+
     text = (
-        f"💳 <b>পেমেন্ট ইনস্ট্রাকশন: {plan['name']}</b>\n\n"
-        f"💰 <b>মূল্য:</b> {plan['price_bdt']} BDT অথবা ${plan['price_usdt']} USDT\n\n"
-        f"নিচের যেকোনো মাধ্যমে পেমেন্ট সম্পন্ন করুন:\n"
-        f"📱 <b>বিকাশ (Personal):</b> <code>{PAYMENT_INFO.get('bkash', 'N/A')}</code>\n"
-        f"📱 <b>নগদ (Personal):</b> <code>{PAYMENT_INFO.get('nagad', 'N/A')}</code>\n"
-        f"🌐 <b>Binance Pay ID:</b> <code>{PAYMENT_INFO.get('binance_pay_id', 'N/A')}</code>\n"
-        f"🪙 <b>USDT (TRC20):</b> <code>{PAYMENT_INFO.get('usdt_trc20', 'N/A')}</code>\n\n"
-        f"⚠️ <b>টাকা পাঠানোর পর:</b>\n"
-        f"নিচের <b>[ ✍️ Submit Trx ID ]</b> বাটনে ক্লিক করে আপনার Transaction ID বা লাস্ট ৪ ডিজিট লিখে পাঠান।\n"
-        f"এডমিন ভেরিফাই করা মাত্রই আপনার ইনবক্সে সিক্রেট লিংক চলে আসবে!"
+        f"💳 <b>পেমেন্ট ইনস্ট্রাকশন: {plan['name']}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"💰 <b>প্রদেয় মূল্য:</b> <b>{plan['price_bdt']} BDT</b> অথবা <b>${plan['price_usdt']} USDT</b>\n\n"
+        f"🔹 <b>bKash (Agent - Cash Out Only):</b>\n"
+        f"👉 <code>{bkash_num}</code>\n\n"
+        f"🔹 <b>Nagad (Agent - Cash Out Only):</b>\n"
+        f"👉 <code>{nagad_num}</code>\n\n"
+        f"⚠️ <b>জরুরি সতর্কতা:</b>\n"
+        f"✔️ <b>bkash, Nagad Cashout Only (Agent)</b>\n"
+        f"👆 শুধুমাত্র ক্যাশআউট করবেন (Send Money গ্রহণযোগ্য নয়)।\n\n"
+        f"🔹 <b>Binance Pay ID:</b>\n"
+        f"👉 <code>{binance_id}</code>\n\n"
+        f"🔹 <b>Usdt Trx (Trc20):</b>\n"
+        f"👉 <code>{usdt_addr}</code>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"➡️ <b>Send ScreenShot Must</b>\n"
+        f"ক্যাশআউট বা ট্রান্সফার করার পর স্ক্রিনশট বা Trx ID পাঠানো বাধ্যতামূলক।\n\n"
+        f"👇 নিচের <b>[ ✍️ Submit Trx ID / Proof ]</b> বাটনে ক্লিক করে প্রুফ পাঠান:"
     )
 
     keyboard = [
-        [InlineKeyboardButton("✍️ Submit Transaction ID", callback_data=f"submit_trx_{plan_key}")],
+        [InlineKeyboardButton("✍️ Submit Trx ID / Proof", callback_data=f"submit_trx_{plan_key}")],
         [InlineKeyboardButton("🔙 Back to Plans", callback_data="plans_menu")],
     ]
     await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
@@ -527,15 +543,16 @@ async def start_trx_submission(update: Update, context: ContextTypes.DEFAULT_TYP
     }
 
     text = (
-        f"✍️ <b>Transaction ID সাবমিট করুন:</b>\n\n"
-        f"আপনার পেমেন্টের TrxID অথবা যে নাম্বার থেকে টাকা পাঠিয়েছেন তা এই চ্যাটে লিখে পাঠান:\n\n"
+        f"✍️ <b>পেমেন্ট প্রুফ ও Trx ID সাবমিট করুন:</b>\n\n"
+        f"📸 <b>পেমেন্টের স্ক্রিনশট (Screenshot)</b> অথবা <b>Trx ID / যে নাম্বার থেকে ক্যাশআউট করেছেন</b> তা এখানে সরাসরি লিখে বা ফটো আকারে পাঠান।\n\n"
+        f"➡️ <b>Send ScreenShot Must</b>\n\n"
         f"<i>(বাতিল করতে চাইলে /cancel লিখুন)</i>"
     )
     await query.edit_message_text(text, parse_mode="HTML")
 
 
 async def handle_user_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles text submissions (like TrxID or Admin inputs)."""
+    """Handles text submissions and payment screenshots (like TrxID or Admin inputs)."""
     user = update.effective_user
     user_id = user.id
 
@@ -552,9 +569,15 @@ async def handle_user_text_message(update: Update, context: ContextTypes.DEFAULT
 
     action = state.get("action")
 
-    # 1. User Submitting TrxID
+    # 1. User Submitting TrxID or Screenshot
     if action == "awaiting_trx":
-        trx_id = update.message.text.strip()
+        photo_file_id = None
+        if update.message.photo:
+            photo_file_id = update.message.photo[-1].file_id
+            trx_id = update.message.caption.strip() if update.message.caption else "📸 Screenshot Attached"
+        else:
+            trx_id = update.message.text.strip() if update.message.text else "N/A"
+
         plan_key = state.get("plan_key")
         plan = PLANS.get(plan_key, {"name": plan_key, "price_bdt": "N/A"})
 
@@ -567,14 +590,14 @@ async def handle_user_text_message(update: Update, context: ContextTypes.DEFAULT
             full_name=user.full_name,
             plan_key=plan_key,
             amount=f"{plan.get('price_bdt')} BDT",
-            payment_method="Mobile / Crypto",
+            payment_method="Agent Cashout / Crypto",
             trx_id=trx_id,
         )
 
         await update.message.reply_text(
             f"✅ <b>পেমেন্ট রিকোয়েস্ট সাবমিট হয়েছে! (ID: #{req_id})</b>\n\n"
             f"📦 <b>প্ল্যান:</b> {plan.get('name')}\n"
-            f"🔢 <b>Trx ID:</b> <code>{trx_id}</code>\n\n"
+            f"🔢 <b>প্রুফ / Trx ID:</b> <code>{trx_id}</code>\n\n"
             f"অ্যাডমিন ভেরিফাই করা মাত্রই আপনি এই বটের ইনবক্সে সমস্ত VIP চ্যানেলের ওয়ান-টাইম জয়েন লিংক পেয়ে যাবেন।",
             parse_mode="HTML",
         )
@@ -585,7 +608,7 @@ async def handle_user_text_message(update: Update, context: ContextTypes.DEFAULT
             f"👤 <b>User:</b> <a href='tg://user?id={user_id}'>{user.full_name}</a> (@{user.username or 'none'})\n"
             f"🆔 <b>User ID:</b> <code>{user_id}</code>\n"
             f"📦 <b>Plan:</b> {plan.get('name')}\n"
-            f"💰 <b>Amount:</b> {plan.get('price_bdt')} BDT\n"
+            f"💰 <b>Amount:</b> {plan.get('price_bdt')} BDT / ${plan.get('price_usdt', 'N/A')} USDT\n"
             f"🔢 <b>Trx ID / Note:</b> <code>{trx_id}</code>"
         )
 
@@ -598,9 +621,18 @@ async def handle_user_text_message(update: Update, context: ContextTypes.DEFAULT
 
         for adm in ADMIN_IDS:
             try:
-                await context.bot.send_message(chat_id=adm, text=admin_card, parse_mode="HTML", reply_markup=markup)
-            except Exception:
-                pass
+                if photo_file_id:
+                    await context.bot.send_photo(
+                        chat_id=adm,
+                        photo=photo_file_id,
+                        caption=admin_card,
+                        parse_mode="HTML",
+                        reply_markup=markup,
+                    )
+                else:
+                    await context.bot.send_message(chat_id=adm, text=admin_card, parse_mode="HTML", reply_markup=markup)
+            except Exception as e:
+                logger.error(f"Failed to alert admin {adm}: {e}")
         return
 
     # 2. Admin Interactive Prompts
@@ -1522,13 +1554,28 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
 
     if data == "payment_info":
         await query.answer()
+        bkash_num = PAYMENT_INFO.get("bkash", "01718539406")
+        nagad_num = PAYMENT_INFO.get("nagad", "01718539406")
+        binance_id = PAYMENT_INFO.get("binance_pay_id", "892612368")
+        usdt_addr = PAYMENT_INFO.get("usdt_trc20", "TNPg8qkhm1xQsMNsgvH6p71tNwVXV7qaJe")
+
         text = (
-            f"💳 <b>অফিশিয়াল পেমেন্ট মেথডস</b>\n\n"
-            f"📱 <b>বিকাশ (Personal):</b> <code>{PAYMENT_INFO.get('bkash', 'N/A')}</code>\n"
-            f"📱 <b>নগদ (Personal):</b> <code>{PAYMENT_INFO.get('nagad', 'N/A')}</code>\n"
-            f"🌐 <b>Binance Pay ID:</b> <code>{PAYMENT_INFO.get('binance_pay_id', 'N/A')}</code>\n"
-            f"🪙 <b>USDT (TRC20):</b> <code>{PAYMENT_INFO.get('usdt_trc20', 'N/A')}</code>\n\n"
-            f"টাকা পাঠানোর পর 'VIP Plans' মেনু থেকে প্ল্যান সিলেক্ট করে Trx ID সাবমিট করুন।"
+            f"💳 <b>অফিশিয়াল পেমেন্ট মেথডস ও গাইড</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"🔹 <b>bKash (Agent - Cash Out Only):</b>\n"
+            f"👉 <code>{bkash_num}</code>\n\n"
+            f"🔹 <b>Nagad (Agent - Cash Out Only):</b>\n"
+            f"👉 <code>{nagad_num}</code>\n\n"
+            f"⚠️ <b>জরুরি সতর্কতা:</b>\n"
+            f"✔️ <b>bkash, Nagad Cashout Only (Agent)</b>\n"
+            f"👆 <b>শুধুমাত্র ক্যাশআউট করবেন</b> (Send Money গ্রহণযোগ্য নয়)।\n\n"
+            f"🔹 <b>Binance Pay ID:</b>\n"
+            f"👉 <code>{binance_id}</code>\n\n"
+            f"🔹 <b>Usdt Trx (Trc20):</b>\n"
+            f"👉 <code>{usdt_addr}</code>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"➡️ <b>Send ScreenShot Must</b>\n"
+            f"টাকা পাঠানোর পর '👑 Select Plan & Pay' তে গিয়ে প্ল্যান সিলেক্ট করে স্ক্রিনশট ও Trx ID সাবমিট করুন।"
         )
         markup = InlineKeyboardMarkup([
             [InlineKeyboardButton("👑 Select Plan & Pay", callback_data="plans_menu")],
@@ -1949,9 +1996,9 @@ def main():
     app.add_handler(CommandHandler("setpayment", cmd_setpayment))
     app.add_handler(CommandHandler("setforcechannel", cmd_setforcechannel))
 
-    # Callbacks and Text Handlers
+    # Callbacks and Text/Photo Handlers
     app.add_handler(CallbackQueryHandler(handle_callback_query))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_user_text_message))
+    app.add_handler(MessageHandler((filters.TEXT | filters.PHOTO) & ~filters.COMMAND, handle_user_text_message))
 
     app.run_polling(drop_pending_updates=True)
 

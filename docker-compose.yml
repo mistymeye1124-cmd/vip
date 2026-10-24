@@ -3,7 +3,10 @@ services:
     build: .
     container_name: pro_access_vault_bot
     restart: unless-stopped
+    env_file:
+      - .env
     volumes:
+      - ./.env:/app/.env
       - ./config.json:/app/config.json
       - ./vault_database.db:/app/vault_database.db
       - ./backups:/app/backups
