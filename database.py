@@ -6,6 +6,7 @@ Guarantees zero data loss, zero corruption, and instant crash recovery.
 """
 
 import os
+import json
 import sqlite3
 import datetime
 import shutil
@@ -91,6 +92,29 @@ class Database:
                     type TEXT NOT NULL DEFAULT 'channel',
                     invite_expire_hours INTEGER NOT NULL DEFAULT 24,
                     created_at TEXT NOT NULL
+                );
+            """)
+
+            # 5. VIP Plans Table (Dynamic Pricing & Duration)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS plans (
+                    key TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    duration_days INTEGER NOT NULL,
+                    price_bdt INTEGER NOT NULL,
+                    price_usdt INTEGER NOT NULL,
+                    is_lifetime INTEGER DEFAULT 0,
+                    features TEXT,
+                    updated_at TEXT NOT NULL
+                );
+            """)
+
+            # 6. Global Configuration Settings Table
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
                 );
             """)
 
@@ -551,7 +575,98 @@ class Database:
             ).fetchall()
             return [dict(r) for r in rows]
 
+    # =========================================================================
+    # PLANS & PRICING PERSISTENCE (Dynamic & Immortal)
+    # =========================================================================
+    def save_plan(
+        self,
+        key: str,
+        name: str,
+        duration_days: int,
+        price_bdt: int,
+        price_usdt: int,
+        is_lifetime: bool,
+        features: Optional[List[str]] = None,
+    ):
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        feat_json = json.dumps(features or [])
+        with self._get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO plans (key, name, duration_days, price_bdt, price_usdt, is_lifetime, features, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET
+                    name = excluded.name,
+                    duration_days = excluded.duration_days,
+                    price_bdt = excluded.price_bdt,
+                    price_usdt = excluded.price_usdt,
+                    is_lifetime = excluded.is_lifetime,
+                    features = excluded.features,
+                    updated_at = excluded.updated_at;
+                """,
+                (key, name, duration_days, price_bdt, price_usdt, 1 if is_lifetime else 0, feat_json, now),
+            )
+            conn.commit()
+
+    def update_plan_price(self, key: str, price_bdt: int, price_usdt: int) -> bool:
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE plans SET price_bdt = ?, price_usdt = ?, updated_at = ?
+                WHERE key = ?;
+                """,
+                (price_bdt, price_usdt, now, key),
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def get_all_plans(self) -> Dict[str, Dict[str, Any]]:
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                "SELECT key, name, duration_days, price_bdt, price_usdt, is_lifetime, features, updated_at FROM plans;"
+            ).fetchall()
+            result = {}
+            for r in rows:
+                d = dict(r)
+                d["is_lifetime"] = bool(d["is_lifetime"])
+                try:
+                    d["features"] = json.loads(d["features"]) if d["features"] else []
+                except Exception:
+                    d["features"] = []
+                result[d["key"]] = d
+            return result
+
+    # =========================================================================
+    # SETTINGS KEY-VALUE STORE
+    # =========================================================================
+    def set_setting(self, key: str, value: str):
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        with self._get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO settings (key, value, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET
+                    value = excluded.value,
+                    updated_at = excluded.updated_at;
+                """,
+                (key, str(value), now),
+            )
+            conn.commit()
+
+    def get_setting(self, key: str, default: Optional[str] = None) -> Optional[str]:
+        with self._get_connection() as conn:
+            row = conn.execute("SELECT value FROM settings WHERE key = ?;", (key,)).fetchone()
+            return row[0] if row else default
+
+    def get_all_settings(self) -> Dict[str, str]:
+        with self._get_connection() as conn:
+            rows = conn.execute("SELECT key, value FROM settings;").fetchall()
+            return {r[0]: r[1] for r in rows}
+
 
 # Global shared instance
 db = Database()
+
 

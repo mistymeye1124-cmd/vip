@@ -162,8 +162,41 @@ except Exception as e:
     logger.error(f"Failed to synchronize channels from SQLite DB: {e}")
     CHANNELS = CONFIG.get("channels", [])
 
-PLANS: Dict[str, Any] = CONFIG.get("plans", {})
-PAYMENT_INFO: Dict[str, str] = CONFIG.get("payment_info", {})
+# Synchronize Plans & Pricing from SQLite Database (Immortal Storage across updates)
+try:
+    db_plans = db.get_all_plans()
+    if db_plans:
+        PLANS: Dict[str, Any] = db_plans
+        CONFIG["plans"] = PLANS
+    else:
+        PLANS: Dict[str, Any] = CONFIG.get("plans", {})
+        for p_key, p_val in PLANS.items():
+            db.save_plan(
+                key=p_key,
+                name=p_val.get("name", p_key),
+                duration_days=p_val.get("duration_days", 30),
+                price_bdt=p_val.get("price_bdt", 1000),
+                price_usdt=p_val.get("price_usdt", 10),
+                is_lifetime=p_val.get("is_lifetime", False),
+                features=p_val.get("features", []),
+            )
+except Exception as e:
+    logger.error(f"Failed to synchronize plans from SQLite DB: {e}")
+    PLANS = CONFIG.get("plans", {})
+
+# Synchronize Payment Info from SQLite Database
+try:
+    pay_settings = db.get_all_settings()
+    PAYMENT_INFO: Dict[str, str] = CONFIG.get("payment_info", {})
+    for k in ("bkash", "nagad", "binance_pay_id", "usdt_trc20"):
+        db_val = pay_settings.get(f"pay_{k}")
+        if db_val:
+            PAYMENT_INFO[k] = db_val
+        elif k in PAYMENT_INFO:
+            db.set_setting(f"pay_{k}", PAYMENT_INFO[k])
+except Exception as e:
+    logger.error(f"Failed to synchronize payment settings from SQLite DB: {e}")
+    PAYMENT_INFO = CONFIG.get("payment_info", {})
 
 # Payment overrides from ENV if set
 if os.getenv("BKASH_NUMBER"):
@@ -190,8 +223,8 @@ USER_STATES: Dict[int, Dict[str, Any]] = {}
 
 
 def save_config():
-    """Persists channels to both SQLite DB and config.json so they are NEVER lost."""
-    global CHANNELS
+    """Persists channels, plans, and payment settings to both SQLite DB and config.json so they are NEVER lost."""
+    global CHANNELS, PLANS, PAYMENT_INFO, FORCE_CHANNEL_ID, FORCE_CHANNEL_LINK, FORCE_CHANNEL_NAME
     for ch in CHANNELS:
         try:
             db.add_or_update_channel(
@@ -203,7 +236,28 @@ def save_config():
         except Exception as e:
             logger.error(f"Failed to persist channel {ch.get('id')} to SQLite DB: {e}")
 
+    for p_key, p_val in PLANS.items():
+        try:
+            db.save_plan(
+                key=p_key,
+                name=p_val.get("name", p_key),
+                duration_days=p_val.get("duration_days", 30),
+                price_bdt=p_val.get("price_bdt", 1000),
+                price_usdt=p_val.get("price_usdt", 10),
+                is_lifetime=p_val.get("is_lifetime", False),
+                features=p_val.get("features", []),
+            )
+        except Exception as e:
+            logger.error(f"Failed to persist plan {p_key} to SQLite DB: {e}")
+
+    for pay_k, pay_v in PAYMENT_INFO.items():
+        try:
+            db.set_setting(f"pay_{pay_k}", pay_v)
+        except Exception as e:
+            pass
+
     CONFIG["channels"] = CHANNELS
+    CONFIG["plans"] = PLANS
     CONFIG["payment_info"] = PAYMENT_INFO
     CONFIG["force_channel_id"] = FORCE_CHANNEL_ID
     CONFIG["force_channel_link"] = FORCE_CHANNEL_LINK
@@ -1241,6 +1295,47 @@ async def handle_user_text_message(update: Update, context: ContextTypes.DEFAULT
             await update.message.reply_text(f"❌ Error adding group: {e}")
         return
 
+    # 9. Admin Awaiting Plan Price Input
+    if action == "admin_awaiting_plan_price":
+        text_in = update.message.text.strip()
+        state = USER_STATES.get(user_id, {})
+        plan_key = state.get("plan_key")
+        USER_STATES.pop(user_id, None)
+
+        if not plan_key or plan_key not in PLANS:
+            await update.message.reply_text("❌ Session expired or invalid plan. Please try again from /admin.")
+            return
+
+        parts = text_in.split()
+        try:
+            bdt = int(parts[0])
+            usdt = int(parts[1]) if len(parts) > 1 else max(1, round(bdt / 100))
+
+            PLANS[plan_key]["price_bdt"] = bdt
+            PLANS[plan_key]["price_usdt"] = usdt
+            db.update_plan_price(plan_key, bdt, usdt)
+            save_config()
+            db.log_activity(user_id, "PRICE_UPDATED", f"Plan {plan_key}: {bdt} BDT / ${usdt} USDT")
+
+            markup = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("💰 Plan Pricing Control", callback_data="adm_action_edit_prices"),
+                    InlineKeyboardButton("⚙️ Admin Dashboard", callback_data="admin_dashboard"),
+                ]
+            ])
+
+            await update.message.reply_text(
+                f"✅ <b>{PLANS[plan_key]['name']} এর মূল্য সফলভাবে আপডেট হয়েছে!</b>\n\n"
+                f"💰 <b>নতুন প্রদেয় মূল্য:</b> <b>{bdt} BDT</b> / <b>${usdt} USDT</b>\n"
+                f"💾 <i>ডাটাবেজ ও বটে পার্মানেন্টলি সেভ হয়ে গেছে!</i>",
+                parse_mode="HTML",
+                reply_markup=markup,
+            )
+        except ValueError:
+            await update.message.reply_text("❌ অবৈধ সংখ্যা! শুধুমাত্র পূর্ণসংখ্যা লিখুন (যেমন: 500 অথবা 500 5)।")
+        except Exception as e:
+            await update.message.reply_text(f"❌ এরর: {e}")
+        return
 
 
 # =============================================================================
@@ -1294,11 +1389,14 @@ async def render_admin_dashboard(update: Update, context: ContextTypes.DEFAULT_T
             InlineKeyboardButton(f"⚙️ Channels & Groups ({len(CHANNELS)})", callback_data="adm_action_channels"),
         ],
         [
+            InlineKeyboardButton("💰 Edit Plan Prices", callback_data="adm_action_edit_prices"),
             InlineKeyboardButton("💳 Edit Payments", callback_data="adm_action_edit_payments"),
-            InlineKeyboardButton("💾 Backup DB Now", callback_data="adm_action_backup"),
         ],
         [
+            InlineKeyboardButton("💾 Backup DB Now", callback_data="adm_action_backup"),
             InlineKeyboardButton("📢 Broadcast DM", callback_data="adm_action_broadcast"),
+        ],
+        [
             InlineKeyboardButton("📋 Live System Logs & Diagnostics", callback_data="adm_action_logs"),
         ],
         [
@@ -1798,6 +1896,56 @@ async def cmd_setpayment(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     save_config()
     await update.message.reply_text(f"✅ Updated <b>{key.upper()}</b> to: <code>{val}</code>", parse_mode="HTML")
+
+
+async def cmd_setprice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Usage: /setprice <monthly|yearly|lifetime> <price_bdt> [price_usdt]"""
+    if not is_admin(update.effective_user.id):
+        return
+    args = context.args
+    if not args or len(args) < 2:
+        lines = [
+            "💰 <b>Usage:</b> <code>/setprice &lt;monthly|yearly|lifetime&gt; &lt;price_bdt&gt; [price_usdt]</code>\n",
+            "<b>Examples:</b>",
+            "• <code>/setprice monthly 500 5</code>",
+            "• <code>/setprice yearly 3000 30</code>",
+            "• <code>/setprice lifetime 5000 50</code>\n",
+            "<b>Current Active Pricing:</b>",
+        ]
+        for pk, pv in PLANS.items():
+            lines.append(f"• <b>{pv['name']}:</b> <code>{pv['price_bdt']} BDT / ${pv['price_usdt']} USDT</code>")
+        await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+        return
+
+    plan_key = args[0].lower()
+    if plan_key not in PLANS:
+        await update.message.reply_text(
+            f"❌ Invalid plan key: <code>{plan_key}</code>. Allowed: <code>{', '.join(PLANS.keys())}</code>",
+            parse_mode="HTML",
+        )
+        return
+
+    try:
+        bdt = int(args[1])
+        usdt = int(args[2]) if len(args) >= 3 else max(1, round(bdt / 100))
+
+        PLANS[plan_key]["price_bdt"] = bdt
+        PLANS[plan_key]["price_usdt"] = usdt
+        db.update_plan_price(plan_key, bdt, usdt)
+        save_config()
+        db.log_activity(update.effective_user.id, "PRICE_UPDATED", f"Plan {plan_key}: {bdt} BDT / ${usdt} USDT")
+
+        await update.message.reply_text(
+            f"✅ <b>Plan Pricing Updated!</b>\n\n"
+            f"📦 <b>Plan:</b> {PLANS[plan_key]['name']}\n"
+            f"💰 <b>New Price:</b> <b>{bdt} BDT</b> / <b>${usdt} USDT</b>\n"
+            f"💾 <i>Saved permanently in SQLite DB & Config.</i>",
+            parse_mode="HTML",
+        )
+    except ValueError:
+        await update.message.reply_text("❌ Price must be a numeric integer value (e.g. 500).")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error updating price: {e}")
 
 
 async def cmd_setforcechannel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2544,6 +2692,46 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
         return
 
+    if data == "adm_action_edit_prices":
+        em_crw = em_tag("crown", "👑")
+        em_dia = em_tag("diamond", "💎")
+        box_border = "━━━━━━━━━━━━━━━━━━━━"
+
+        lines = [
+            f"{em_dia} <b>MANAGE VIP PLAN PRICING</b> {em_crw}\n",
+            f"{box_border}",
+            "যেকোনো প্ল্যানের মূল্য (BDT ও USDT) পরিবর্তন করতে নিচের বাটনে ট্যাপ করুন:\n"
+        ]
+        for pk in ("monthly", "yearly", "lifetime"):
+            pv = PLANS.get(pk)
+            if pv:
+                lines.append(f"• <b>{pv['name']}:</b>\n  মূল্য: <b>{pv['price_bdt']} BDT</b> / <b>${pv['price_usdt']} USDT</b>\n")
+        lines.append(f"{box_border}")
+        lines.append("<i>বাটনে ক্লিক করার পর নতুন মূল্য লিখুন অথবা কমান্ড ব্যবহার করুন: <code>/setprice &lt;plan&gt; &lt;bdt&gt; [usdt]</code></i>")
+
+        buttons = [
+            [InlineKeyboardButton(f"📅 Change Monthly ({PLANS.get('monthly', {}).get('price_bdt', 0)} BDT)", callback_data="adm_change_price_monthly")],
+            [InlineKeyboardButton(f"📆 Change Yearly ({PLANS.get('yearly', {}).get('price_bdt', 0)} BDT)", callback_data="adm_change_price_yearly")],
+            [InlineKeyboardButton(f"👑 Change Lifetime ({PLANS.get('lifetime', {}).get('price_bdt', 0)} BDT)", callback_data="adm_change_price_lifetime")],
+            [InlineKeyboardButton("🔙 Back to Admin", callback_data="admin_dashboard")],
+        ]
+        await query.edit_message_text("\n".join(lines), parse_mode="HTML", reply_markup=InlineKeyboardMarkup(buttons))
+        return
+
+    if data.startswith("adm_change_price_"):
+        plan_key = data.replace("adm_change_price_", "")
+        if plan_key in PLANS:
+            USER_STATES[user_id] = {"action": "admin_awaiting_plan_price", "plan_key": plan_key}
+            await query.edit_message_text(
+                f"💰 <b>Set Price for {PLANS[plan_key]['name']}</b>\n\n"
+                f"বর্তমান মূল্য: <b>{PLANS[plan_key]['price_bdt']} BDT / ${PLANS[plan_key]['price_usdt']} USDT</b>\n\n"
+                f"নতুন <b>BDT প্রাইস</b> এবং স্পেস দিয়ে <b>USDT প্রাইস</b> লিখে পাঠান।\n"
+                f"উদাহরণ: <code>500 5</code> (অথবা শুধু <code>500</code> লিখলে USDT অটো ক্যালকুলেট হবে)\n\n"
+                f"<i>(বাতিল করতে চাইলে /cancel লিখুন)</i>",
+                parse_mode="HTML",
+            )
+        return
+
 
 
 async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2638,6 +2826,7 @@ def main():
     app.add_handler(CommandHandler("delgroup", cmd_delchannel))
     app.add_handler(CommandHandler("channels", cmd_channels))
     app.add_handler(CommandHandler("setpayment", cmd_setpayment))
+    app.add_handler(CommandHandler("setprice", cmd_setprice))
     app.add_handler(CommandHandler("setforcechannel", cmd_setforcechannel))
 
     # Channel & Group Automatic Addition Hook

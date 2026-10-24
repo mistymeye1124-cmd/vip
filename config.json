@@ -12,35 +12,37 @@
   "plans": {
     "monthly": {
       "key": "monthly",
-      "name": "📅 Monthly Access",
+      "name": "\ud83d\udcc5 Monthly Access",
       "duration_days": 30,
-      "price_bdt": 1000,
-      "price_usdt": 10,
+      "price_bdt": 750,
+      "price_usdt": 8,
       "is_lifetime": false,
       "features": [
         "Full access to Course Vault",
         "Discussion & Support Group",
         "Weekly Course Updates",
         "30 Days Validity"
-      ]
+      ],
+      "updated_at": "2026-10-24T02:53:36.711305+00:00"
     },
     "yearly": {
       "key": "yearly",
-      "name": "📆 Yearly Access",
+      "name": "\ud83d\udcc6 Yearly Access",
       "duration_days": 365,
-      "price_bdt": 5000,
-      "price_usdt": 50,
+      "price_bdt": 4200,
+      "price_usdt": 42,
       "is_lifetime": false,
       "features": [
         "Full access to Course Vault",
         "Discussion & Support Group",
         "All updates for 365 days",
         "Save 58% compared to monthly"
-      ]
+      ],
+      "updated_at": "2026-10-24T02:53:36.712309+00:00"
     },
     "lifetime": {
       "key": "lifetime",
-      "name": "👑 Lifetime Access",
+      "name": "\ud83d\udc51 Lifetime Access",
       "duration_days": 99999,
       "price_bdt": 8000,
       "price_usdt": 80,
@@ -50,12 +52,13 @@
         "Never expires, zero recurring fees",
         "All current + future course topics",
         "Highest VIP priority support"
-      ]
+      ],
+      "updated_at": "2026-10-24T02:53:36.718313+00:00"
     }
   },
   "payment_info": {
-    "bkash": "01718539406 (Agent - Cash Out Only)",
-    "nagad": "01718539406 (Agent - Cash Out Only)",
+    "bkash": "01718539406",
+    "nagad": "01718539406",
     "binance_pay_id": "892612368",
     "usdt_trc20": "TNPg8qkhm1xQsMNsgvH6p71tNwVXV7qaJe"
   },
