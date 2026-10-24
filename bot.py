@@ -209,11 +209,16 @@ if os.getenv("USDT_TRC20"):
     PAYMENT_INFO["usdt_trc20"] = os.getenv("USDT_TRC20")
 CONFIG["payment_info"] = PAYMENT_INFO
 
-# Force Channel Join Configuration
-FORCE_CHANNEL_ID: str = os.getenv("FORCE_CHANNEL_ID") or str(CONFIG.get("force_channel_id") or "")
-FORCE_CHANNEL_LINK: str = os.getenv("FORCE_CHANNEL_LINK") or str(CONFIG.get("force_channel_link") or "")
-FORCE_CHANNEL_NAME: str = os.getenv("FORCE_CHANNEL_NAME") or str(CONFIG.get("force_channel_name") or "Official Channel")
+# VIP Preview Channel Configuration (Loaded from SQLite first)
+VIP_PREVIEW_LINK: str = db.get_setting("vip_preview_link") or os.getenv("VIP_PREVIEW_LINK") or str(CONFIG.get("vip_preview_link") or "")
+VIP_PREVIEW_NAME: str = db.get_setting("vip_preview_name") or os.getenv("VIP_PREVIEW_NAME") or str(CONFIG.get("vip_preview_name") or "VIP Preview & Proof Channel")
+CONFIG["vip_preview_link"] = VIP_PREVIEW_LINK
+CONFIG["vip_preview_name"] = VIP_PREVIEW_NAME
 
+# Force Channel Join Configuration (Loaded from SQLite first)
+FORCE_CHANNEL_ID: str = db.get_setting("force_channel_id") or os.getenv("FORCE_CHANNEL_ID") or str(CONFIG.get("force_channel_id") or "")
+FORCE_CHANNEL_LINK: str = db.get_setting("force_channel_link") or os.getenv("FORCE_CHANNEL_LINK") or str(CONFIG.get("force_channel_link") or "")
+FORCE_CHANNEL_NAME: str = db.get_setting("force_channel_name") or os.getenv("FORCE_CHANNEL_NAME") or str(CONFIG.get("force_channel_name") or "Official Channel")
 CONFIG["force_channel_id"] = FORCE_CHANNEL_ID
 CONFIG["force_channel_link"] = FORCE_CHANNEL_LINK
 CONFIG["force_channel_name"] = FORCE_CHANNEL_NAME
@@ -224,7 +229,7 @@ USER_STATES: Dict[int, Dict[str, Any]] = {}
 
 def save_config():
     """Persists channels, plans, and payment settings to both SQLite DB and config.json so they are NEVER lost."""
-    global CHANNELS, PLANS, PAYMENT_INFO, FORCE_CHANNEL_ID, FORCE_CHANNEL_LINK, FORCE_CHANNEL_NAME
+    global CHANNELS, PLANS, PAYMENT_INFO, FORCE_CHANNEL_ID, FORCE_CHANNEL_LINK, FORCE_CHANNEL_NAME, VIP_PREVIEW_LINK, VIP_PREVIEW_NAME
     for ch in CHANNELS:
         try:
             db.add_or_update_channel(
@@ -256,12 +261,23 @@ def save_config():
         except Exception as e:
             pass
 
+    try:
+        db.set_setting("vip_preview_link", VIP_PREVIEW_LINK or "")
+        db.set_setting("vip_preview_name", VIP_PREVIEW_NAME or "")
+        db.set_setting("force_channel_id", FORCE_CHANNEL_ID or "")
+        db.set_setting("force_channel_link", FORCE_CHANNEL_LINK or "")
+        db.set_setting("force_channel_name", FORCE_CHANNEL_NAME or "")
+    except Exception as e:
+        logger.error(f"Failed to persist settings to SQLite DB: {e}")
+
     CONFIG["channels"] = CHANNELS
     CONFIG["plans"] = PLANS
     CONFIG["payment_info"] = PAYMENT_INFO
     CONFIG["force_channel_id"] = FORCE_CHANNEL_ID
     CONFIG["force_channel_link"] = FORCE_CHANNEL_LINK
     CONFIG["force_channel_name"] = FORCE_CHANNEL_NAME
+    CONFIG["vip_preview_link"] = VIP_PREVIEW_LINK
+    CONFIG["vip_preview_name"] = VIP_PREVIEW_NAME
     try:
         with open(CONFIG_PATH, "w", encoding="utf-8") as f:
             json.dump(CONFIG, f, indent=2)
@@ -738,6 +754,13 @@ async def render_plans_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     p_yr = PLANS.get("yearly", {"price_bdt": 5000, "price_usdt": 50})
     p_life = PLANS.get("lifetime", {"price_bdt": 8000, "price_usdt": 80})
 
+    preview_text = ""
+    if VIP_PREVIEW_LINK:
+        preview_text = (
+            f"\n\n👁️ <b>VIP Preview / কোর্স প্রুফ:</b>\n"
+            f"👉 জয়েন করার আগে কোর্স ভল্ট ও প্রুফ দেখতে <a href='{VIP_PREVIEW_LINK}'>এখানে ক্লিক করুন</a> 🎬"
+        )
+
     text = (
         f"{em_crw} <b>{PRODUCT_NAME} — VIP PLANS & PRICING</b> {em_dia}\n"
         f"{box_border}\n"
@@ -751,21 +774,26 @@ async def render_plans_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"<b>৩. 👑 Lifetime Access (Forever VIP)</b>\n"
         f"• একবার পেমেন্টে আজীবনের জন্য ফুল ফ্রি এক্সেস {em_zap}\n"
         f"• ইনভেস্টমেন্ট: <b>{p_life.get('price_bdt', 8000)} BDT / ${p_life.get('price_usdt', 80)} USDT</b>\n"
-        f"{box_border}\n"
+        f"{box_border}"
+        f"{preview_text}\n\n"
         f"👉 <i>যে প্ল্যানটি নিতে চান নিচের বাটনে ট্যাপ করুন:</i>"
     )
 
-    keyboard = [
+    keyboard = []
+    if VIP_PREVIEW_LINK:
+        keyboard.append([InlineKeyboardButton("👁️ View VIP Preview Channel 🎬", url=VIP_PREVIEW_LINK)])
+
+    keyboard.extend([
         [InlineKeyboardButton("📅 Buy Monthly (30 Days)", callback_data="buy_monthly")],
         [InlineKeyboardButton("📆 Buy Yearly (365 Days)", callback_data="buy_yearly")],
         [InlineKeyboardButton("👑 Buy Lifetime (Forever)", callback_data="buy_lifetime")],
         [InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu")],
-    ]
+    ])
 
     if update.callback_query:
-        await update.callback_query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+        await update.callback_query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard), disable_web_page_preview=True)
     else:
-        await update.message.reply_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+        await update.message.reply_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard), disable_web_page_preview=True)
 
 
 async def send_payment_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1343,6 +1371,50 @@ async def handle_user_text_message(update: Update, context: ContextTypes.DEFAULT
             await update.message.reply_text(f"❌ এরর: {e}")
         return
 
+    # 11. Admin Awaiting Preview Link Input
+    if action == "admin_awaiting_preview_link":
+        text_in = update.message.text.strip()
+        USER_STATES.pop(user_id, None)
+
+        if text_in.lower() in ("off", "disable", "none", "remove", "clear"):
+            VIP_PREVIEW_LINK = ""
+            VIP_PREVIEW_NAME = ""
+            save_config()
+            await update.message.reply_text("✅ VIP Preview link disabled.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⚙️ Admin Dashboard", callback_data="admin_dashboard")]]))
+            return
+
+        if text_in.startswith("@"):
+            link = f"https://t.me/{text_in[1:]}"
+        elif not text_in.startswith("http"):
+            link = f"https://t.me/{text_in}"
+        else:
+            link = text_in
+
+        VIP_PREVIEW_LINK = link
+        VIP_PREVIEW_NAME = "VIP Preview Channel"
+        save_config()
+        db.log_activity(user_id, "PREVIEW_LINK_UPDATED", link)
+
+        markup = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("👁️ Test Preview Link", url=link),
+                InlineKeyboardButton("👑 View Plans Menu", callback_data="plans_menu"),
+            ],
+            [
+                InlineKeyboardButton("⚙️ Admin Dashboard", callback_data="admin_dashboard"),
+            ]
+        ])
+
+        await update.message.reply_text(
+            f"✅ <b>VIP Preview Link সফলভাবে সেট হয়েছে!</b>\n\n"
+            f"🔗 <b>লিংক:</b> {link}\n"
+            f"💾 <i>ডাটাবেজে স্থায়ীভাবে সেভ করা হয়েছে। এখন ইউজাররা /plans মেনুতে প্রিভিউ বাটন দেখতে পাবে।</i>",
+            parse_mode="HTML",
+            reply_markup=markup,
+            disable_web_page_preview=True,
+        )
+        return
+
     # 10. Admin Awaiting Payment Input
     if action == "admin_awaiting_payment_input":
         text_in = update.message.text.strip()
@@ -1442,6 +1514,9 @@ async def render_admin_dashboard(update: Update, context: ContextTypes.DEFAULT_T
         [
             InlineKeyboardButton("💾 Backup DB Now", callback_data="adm_action_backup"),
             InlineKeyboardButton("📢 Broadcast DM", callback_data="adm_action_broadcast"),
+        ],
+        [
+            InlineKeyboardButton(f"👁️ VIP Preview Link ({'Active' if VIP_PREVIEW_LINK else 'None'})", callback_data="adm_action_preview"),
         ],
         [
             InlineKeyboardButton("📋 Live System Logs & Diagnostics", callback_data="adm_action_logs"),
@@ -1997,6 +2072,62 @@ async def cmd_setprice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     except Exception as e:
         await update.message.reply_text(f"❌ Error updating price: {e}")
+
+
+async def cmd_setpreview(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Usage:
+      /setpreview <link> [Name]
+      /setpreview off (To disable)
+    """
+    if not is_admin(update.effective_user.id):
+        return
+
+    global VIP_PREVIEW_LINK, VIP_PREVIEW_NAME
+    args = context.args
+
+    if not args:
+        curr = f"Link: {VIP_PREVIEW_LINK}\nName: {VIP_PREVIEW_NAME}" if VIP_PREVIEW_LINK else "<i>Disabled / Not set</i>"
+        await update.message.reply_text(
+            f"👁️ <b>VIP PREVIEW CHANNEL CONFIGURATION:</b>\n\n"
+            f"{curr}\n\n"
+            f"<b>Commands:</b>\n"
+            f"• Set Preview: <code>/setpreview &lt;invite_link&gt; [name]</code>\n"
+            f"• Example: <code>/setpreview https://t.me/your_preview_channel VIP Free Preview</code>\n"
+            f"• Disable: <code>/setpreview off</code>",
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
+        return
+
+    if args[0].lower() in ("off", "disable", "none", "remove", "clear"):
+        VIP_PREVIEW_LINK = ""
+        VIP_PREVIEW_NAME = ""
+        save_config()
+        await update.message.reply_text("✅ <b>VIP Preview Channel disabled!</b>", parse_mode="HTML")
+        return
+
+    raw_link = args[0].strip()
+    if raw_link.startswith("@"):
+        link = f"https://t.me/{raw_link[1:]}"
+    elif not raw_link.startswith("http"):
+        link = f"https://t.me/{raw_link}"
+    else:
+        link = raw_link
+
+    name = " ".join(args[1:]) if len(args) > 1 else "VIP Preview Channel"
+
+    VIP_PREVIEW_LINK = link
+    VIP_PREVIEW_NAME = name
+    save_config()
+
+    await update.message.reply_text(
+        f"✅ <b>VIP Preview Link Configured!</b>\n\n"
+        f"👁️ <b>Name:</b> {name}\n"
+        f"🔗 <b>Link:</b> {link}\n\n"
+        f"<i>ইউজাররা /plans মেনুতে এখন এই প্রিভিউ চ্যানেলের ডিরেক্ট বাটন ও লিংক দেখতে পাবেন!</i>",
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+    )
 
 
 async def cmd_setforcechannel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2595,6 +2726,43 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         )
         return
 
+    if data == "adm_action_preview":
+        curr = f"<code>{VIP_PREVIEW_LINK}</code> ({VIP_PREVIEW_NAME})" if VIP_PREVIEW_LINK else "<i>Disabled / Not set</i>"
+        text = (
+            "👁️ <b>VIP PREVIEW CHANNEL LINK</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            f"বর্তমান লিংক: {curr}\n\n"
+            "এই লিংকটি ইউজারদের /plans মেনুতে 'View VIP Preview Channel' বাটন আকারে প্রদর্শিত হবে যাতে ইউজাররা কেনার আগে কোর্স ভল্ট ও প্রুফ দেখতে পারে।\n\n"
+            "নতুন প্রিভিউ লিংক সেট করতে নিচের বাটনে চাপ দিন অথবা কমান্ড পাঠান:\n"
+            "<code>/setpreview &lt;link&gt;</code>"
+        )
+        buttons = [
+            [InlineKeyboardButton("✏️ Set / Change Preview Link", callback_data="adm_set_preview_prompt")],
+        ]
+        if VIP_PREVIEW_LINK:
+            buttons.append([InlineKeyboardButton("❌ Remove Preview Link", callback_data="adm_remove_preview_link")])
+        buttons.append([InlineKeyboardButton("🔙 Back to Admin", callback_data="admin_dashboard")])
+        await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(buttons), disable_web_page_preview=True)
+        return
+
+    if data == "adm_set_preview_prompt":
+        USER_STATES[user_id] = {"action": "admin_awaiting_preview_link"}
+        await query.edit_message_text(
+            "👁️ <b>Set VIP Preview Channel Link:</b>\n\n"
+            "দয়া করে আপনার VIP Preview চ্যানেলের লিংক (যেমন: <code>https://t.me/your_preview_channel</code> বা <code>@channel_username</code>) পাঠিয়ে দিন:\n\n"
+            "<i>(বাতিল করতে চাইলে /cancel লিখুন)</i>",
+            parse_mode="HTML",
+        )
+        return
+
+    if data == "adm_remove_preview_link":
+        VIP_PREVIEW_LINK = ""
+        VIP_PREVIEW_NAME = ""
+        save_config()
+        await query.answer("Preview link removed!", show_alert=True)
+        await render_admin_dashboard(update, context)
+        return
+
     if data == "adm_action_del_channel":
         if not CHANNELS:
             await query.answer("No channels or groups configured to delete!", show_alert=True)
@@ -2907,6 +3075,7 @@ def main():
     app.add_handler(CommandHandler("setpayment", cmd_setpayment))
     app.add_handler(CommandHandler("setprice", cmd_setprice))
     app.add_handler(CommandHandler("setforcechannel", cmd_setforcechannel))
+    app.add_handler(CommandHandler("setpreview", cmd_setpreview))
 
     # Channel & Group Automatic Addition Hook
     app.add_handler(ChatMemberHandler(handle_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER))
