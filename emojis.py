@@ -427,111 +427,137 @@ def render_premium_html(text: str) -> str:
 
 def patch_bot_for_premium_emojis():
     """
-    Universally patches python-telegram-bot's telegram.Bot class to ensure
-    100% of outgoing HTML messages automatically render Telegram Premium custom emojis.
-    Includes automated recovery from parsing/entity errors with zero bot downtime.
+    Universally patches python-telegram-bot's telegram.Bot AND telegram.ext.ExtBot classes
+    to ensure 100% of outgoing HTML messages automatically render Telegram Premium custom emojis.
+    Handles both positional and keyword arguments, with automated fallback for parse errors.
     """
     try:
         from telegram import Bot
         from telegram.error import BadRequest
 
-        _orig_send_message = Bot.send_message
-        _orig_edit_message_text = Bot.edit_message_text
-        _orig_send_photo = Bot.send_photo
-        _orig_edit_message_caption = Bot.edit_message_caption
+        try:
+            from telegram.ext import ExtBot
+            classes_to_patch = [Bot, ExtBot]
+        except Exception:
+            classes_to_patch = [Bot]
 
-        async def safe_send_message(self, *args, **kwargs):
-            parse_mode = kwargs.get("parse_mode")
-            if parse_mode == "HTML" and kwargs.get("text"):
-                kwargs["text"] = render_premium_html(kwargs["text"])
-            try:
-                return await _orig_send_message(self, *args, **kwargs)
-            except BadRequest as e:
-                err_msg = str(e).lower()
-                if "message is not modified" in err_msg:
-                    return True
-                if any(term in err_msg for term in ("can't parse entities", "entity_text_invalid", "custom_emoji_id_invalid", "entity_bounds_invalid", "tag_empty", "failed to parse")):
-                    if kwargs.get("text"):
-                        kwargs["text"] = strip_tg_emoji(kwargs["text"])
-                    try:
-                        return await _orig_send_message(self, *args, **kwargs)
-                    except BadRequest as e2:
-                        if "message is not modified" in str(e2).lower():
-                            return True
-                        kwargs["parse_mode"] = None
-                        return await _orig_send_message(self, *args, **kwargs)
-                raise
+        for cls in classes_to_patch:
+            _orig_send_message = cls.send_message
+            _orig_edit_message_text = cls.edit_message_text
+            _orig_send_photo = cls.send_photo
+            _orig_edit_message_caption = cls.edit_message_caption
 
-        async def safe_edit_message_text(self, *args, **kwargs):
-            parse_mode = kwargs.get("parse_mode")
-            if parse_mode == "HTML" and kwargs.get("text"):
-                kwargs["text"] = render_premium_html(kwargs["text"])
-            try:
-                return await _orig_edit_message_text(self, *args, **kwargs)
-            except BadRequest as e:
-                err_msg = str(e).lower()
-                if "message is not modified" in err_msg:
-                    return True
-                if any(term in err_msg for term in ("can't parse entities", "entity_text_invalid", "custom_emoji_id_invalid", "entity_bounds_invalid", "tag_empty", "failed to parse")):
-                    if kwargs.get("text"):
-                        kwargs["text"] = strip_tg_emoji(kwargs["text"])
-                    try:
-                        return await _orig_edit_message_text(self, *args, **kwargs)
-                    except BadRequest as e2:
-                        if "message is not modified" in str(e2).lower():
-                            return True
-                        kwargs["parse_mode"] = None
-                        return await _orig_edit_message_text(self, *args, **kwargs)
-                raise
+            async def safe_send_message(self, *args, **kwargs):
+                pm = kwargs.get("parse_mode")
+                if pm == "HTML":
+                    if "text" in kwargs and kwargs["text"]:
+                        kwargs["text"] = render_premium_html(kwargs["text"])
+                    elif len(args) >= 2 and isinstance(args[1], str):
+                        new_args = list(args)
+                        new_args[1] = render_premium_html(new_args[1])
+                        args = tuple(new_args)
+                try:
+                    return await _orig_send_message(self, *args, **kwargs)
+                except BadRequest as e:
+                    err_msg = str(e).lower()
+                    if "message is not modified" in err_msg:
+                        return True
+                    if any(term in err_msg for term in ("can't parse entities", "entity_text_invalid", "custom_emoji_id_invalid", "entity_bounds_invalid", "tag_empty", "failed to parse")):
+                        if "text" in kwargs and kwargs["text"]:
+                            kwargs["text"] = strip_tg_emoji(kwargs["text"])
+                        elif len(args) >= 2 and isinstance(args[1], str):
+                            new_args = list(args)
+                            new_args[1] = strip_tg_emoji(new_args[1])
+                            args = tuple(new_args)
+                        try:
+                            return await _orig_send_message(self, *args, **kwargs)
+                        except BadRequest as e2:
+                            if "message is not modified" in str(e2).lower():
+                                return True
+                            kwargs["parse_mode"] = None
+                            return await _orig_send_message(self, *args, **kwargs)
+                    raise
 
-        async def safe_send_photo(self, *args, **kwargs):
-            parse_mode = kwargs.get("parse_mode")
-            if parse_mode == "HTML" and kwargs.get("caption"):
-                kwargs["caption"] = render_premium_html(kwargs["caption"])
-            try:
-                return await _orig_send_photo(self, *args, **kwargs)
-            except BadRequest as e:
-                err_msg = str(e).lower()
-                if "message is not modified" in err_msg:
-                    return True
-                if any(term in err_msg for term in ("can't parse entities", "entity_text_invalid", "custom_emoji_id_invalid", "entity_bounds_invalid", "tag_empty", "failed to parse")):
-                    if kwargs.get("caption"):
-                        kwargs["caption"] = strip_tg_emoji(kwargs["caption"])
-                    try:
-                        return await _orig_send_photo(self, *args, **kwargs)
-                    except BadRequest as e2:
-                        if "message is not modified" in str(e2).lower():
-                            return True
-                        kwargs["parse_mode"] = None
-                        return await _orig_send_photo(self, *args, **kwargs)
-                raise
+            async def safe_edit_message_text(self, *args, **kwargs):
+                pm = kwargs.get("parse_mode")
+                if pm == "HTML":
+                    if "text" in kwargs and kwargs["text"]:
+                        kwargs["text"] = render_premium_html(kwargs["text"])
+                    elif len(args) >= 1 and isinstance(args[0], str):
+                        new_args = list(args)
+                        new_args[0] = render_premium_html(new_args[0])
+                        args = tuple(new_args)
+                try:
+                    return await _orig_edit_message_text(self, *args, **kwargs)
+                except BadRequest as e:
+                    err_msg = str(e).lower()
+                    if "message is not modified" in err_msg:
+                        return True
+                    if any(term in err_msg for term in ("can't parse entities", "entity_text_invalid", "custom_emoji_id_invalid", "entity_bounds_invalid", "tag_empty", "failed to parse")):
+                        if "text" in kwargs and kwargs["text"]:
+                            kwargs["text"] = strip_tg_emoji(kwargs["text"])
+                        elif len(args) >= 1 and isinstance(args[0], str):
+                            new_args = list(args)
+                            new_args[0] = strip_tg_emoji(new_args[0])
+                            args = tuple(new_args)
+                        try:
+                            return await _orig_edit_message_text(self, *args, **kwargs)
+                        except BadRequest as e2:
+                            if "message is not modified" in str(e2).lower():
+                                return True
+                            kwargs["parse_mode"] = None
+                            return await _orig_edit_message_text(self, *args, **kwargs)
+                    raise
 
-        async def safe_edit_message_caption(self, *args, **kwargs):
-            parse_mode = kwargs.get("parse_mode")
-            if parse_mode == "HTML" and kwargs.get("caption"):
-                kwargs["caption"] = render_premium_html(kwargs["caption"])
-            try:
-                return await _orig_edit_message_caption(self, *args, **kwargs)
-            except BadRequest as e:
-                err_msg = str(e).lower()
-                if "message is not modified" in err_msg:
-                    return True
-                if any(term in err_msg for term in ("can't parse entities", "entity_text_invalid", "custom_emoji_id_invalid", "entity_bounds_invalid", "tag_empty", "failed to parse")):
-                    if kwargs.get("caption"):
-                        kwargs["caption"] = strip_tg_emoji(kwargs["caption"])
-                    try:
-                        return await _orig_edit_message_caption(self, *args, **kwargs)
-                    except BadRequest as e2:
-                        if "message is not modified" in str(e2).lower():
-                            return True
-                        kwargs["parse_mode"] = None
-                        return await _orig_edit_message_caption(self, *args, **kwargs)
-                raise
+            async def safe_send_photo(self, *args, **kwargs):
+                pm = kwargs.get("parse_mode")
+                if pm == "HTML" and kwargs.get("caption"):
+                    kwargs["caption"] = render_premium_html(kwargs["caption"])
+                try:
+                    return await _orig_send_photo(self, *args, **kwargs)
+                except BadRequest as e:
+                    err_msg = str(e).lower()
+                    if "message is not modified" in err_msg:
+                        return True
+                    if any(term in err_msg for term in ("can't parse entities", "entity_text_invalid", "custom_emoji_id_invalid", "entity_bounds_invalid", "tag_empty", "failed to parse")):
+                        if kwargs.get("caption"):
+                            kwargs["caption"] = strip_tg_emoji(kwargs["caption"])
+                        try:
+                            return await _orig_send_photo(self, *args, **kwargs)
+                        except BadRequest as e2:
+                            if "message is not modified" in str(e2).lower():
+                                return True
+                            kwargs["parse_mode"] = None
+                            return await _orig_send_photo(self, *args, **kwargs)
+                    raise
 
-        Bot.send_message = safe_send_message
-        Bot.edit_message_text = safe_edit_message_text
-        Bot.send_photo = safe_send_photo
-        Bot.edit_message_caption = safe_edit_message_caption
-        logger.info("Universal Telegram Premium Custom Emoji Hook initialized on Bot methods.")
+            async def safe_edit_message_caption(self, *args, **kwargs):
+                pm = kwargs.get("parse_mode")
+                if pm == "HTML" and kwargs.get("caption"):
+                    kwargs["caption"] = render_premium_html(kwargs["caption"])
+                try:
+                    return await _orig_edit_message_caption(self, *args, **kwargs)
+                except BadRequest as e:
+                    err_msg = str(e).lower()
+                    if "message is not modified" in err_msg:
+                        return True
+                    if any(term in err_msg for term in ("can't parse entities", "entity_text_invalid", "custom_emoji_id_invalid", "entity_bounds_invalid", "tag_empty", "failed to parse")):
+                        if kwargs.get("caption"):
+                            kwargs["caption"] = strip_tg_emoji(kwargs["caption"])
+                        try:
+                            return await _orig_edit_message_caption(self, *args, **kwargs)
+                        except BadRequest as e2:
+                            if "message is not modified" in str(e2).lower():
+                                return True
+                            kwargs["parse_mode"] = None
+                            return await _orig_edit_message_caption(self, *args, **kwargs)
+                    raise
+
+            cls.send_message = safe_send_message
+            cls.edit_message_text = safe_edit_message_text
+            cls.send_photo = safe_send_photo
+            cls.edit_message_caption = safe_edit_message_caption
+
+        logger.info("Universal Telegram Premium Custom Emoji Hook initialized on Bot and ExtBot methods.")
     except Exception as e:
         logger.error(f"Failed to hook Bot methods for premium emojis: {e}")

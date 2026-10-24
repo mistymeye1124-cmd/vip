@@ -475,11 +475,39 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await send_force_sub_message(update, context, unjoined_link, unjoined_name)
         return
 
+    em_crw = em_tag("crown", "👑")
+    em_dia = em_tag("diamond", "💎")
+    em_usr = em_tag("profile", "👤")
+    em_shd = em_tag("verify", "🛡️")
+    em_crs = em_tag("courses", "🎓")
+    em_chn = em_tag("broadcast", "📢")
+    em_grp = em_tag("referral", "👥")
+    em_wal = em_tag("wallet", "💳")
+    em_zap = em_tag("zap", "⚡")
+    em_chk = em_tag("check", "🟢")
+    em_sup = em_tag("support", "💬")
+
+    sub = db.get_subscriber(user_id)
+    is_vip = sub and sub.get("status") == "active"
+    tier_label = f"👑 VIP ({sub['plan_name']})" if is_vip else "⭐ Free Guest"
+    status_text = "Active & Verified" if is_vip else "24/7 Instant Auto-Delivery"
+    box_border = "━━━━━━━━━━━━━━━━━━━━"
+
     welcome_text = (
-        f"👋 <b>স্বাগতম, {user.first_name}!</b>\n\n"
-        f"🏛️ <b>{PRODUCT_NAME}</b> এ আপনাকে স্বাগতম।\n"
-        f"এখানে আপনি পাবেন সব এক্সক্লুসিভ কোর্স, সিক্রেট মেথডস, প্রিমিয়াম লেকচার এবং ভিআইপি সাপোর্ট।\n\n"
-        f"নিচের বাটনগুলো ব্যবহার করে প্ল্যান দেখুন অথবা আপনার মেম্বারশিপ স্ট্যাটাস চেক করুন:"
+        f"{em_crw} <b>{PRODUCT_NAME} — VIP HUB</b> {em_dia}\n"
+        f"<i>স্বাগতম, {html.escape(user.first_name or 'VIP Member')}! এক্সক্লুসিভ কোর্স ভল্ট ও প্রিমিয়াম হাব।</i>\n\n"
+        f"{box_border}\n"
+        f"{em_usr} <b>Customer ID:</b> <code>#{user_id}</code>\n"
+        f"{em_shd} <b>Account Tier:</b> <code>{tier_label}</code>\n"
+        f"{em_chk} <b>Service Status:</b> <code>{status_text}</code>\n"
+        f"{em_zap} <b>Delivery:</b> <code>Anti-Leak 1-Time Invite Links</code>\n"
+        f"{box_border}\n\n"
+        f"🏛️ <b>VIP Vault Services:</b>\n"
+        f"• {em_crs} <b>Courses:</b> লাইফটাইম ক্লাউড ড্রাইভ ও সিক্রেট মেথডস\n"
+        f"• {em_chn} <b>VIP Channels:</b> প্রতিদিন নতুন কোর্স রিলিজ ও রিসোর্স\n"
+        f"• {em_grp} <b>VIP Groups:</b> সিক্রেট ডিসকাশন ও স্টুডেন্ট নেটওয়ার্ক\n"
+        f"• {em_sup} <b>Live Support:</b> ২৪/৭ ডিরেক্ট অ্যাডমিন অ্যাসিস্ট্যান্স\n\n"
+        f"👉 <i>নিচের বাটনগুলো ব্যবহার করে প্ল্যান ব্রাউজ বা অ্যাকাউন্ট পরিচালনা করুন:</i>"
     )
 
     keyboard = [
@@ -519,20 +547,37 @@ async def cmd_myplan(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     sub = db.get_subscriber(user_id)
+    em_crw = em_tag("crown", "👑")
+    em_dia = em_tag("diamond", "💎")
+    em_usr = em_tag("profile", "👤")
+    em_shd = em_tag("verify", "🛡️")
+    em_crs = em_tag("cross", "❌")
+    em_chk = em_tag("check", "🟢")
+    em_zap = em_tag("zap", "⚡")
+    em_ord = em_tag("orders", "📦")
+    box_border = "━━━━━━━━━━━━━━━━━━━━"
 
     if not sub or sub["status"] != "active":
         text = (
-            f"❌ <b>আপনার কোনো অ্যাক্টিভ মেম্বারশিপ নেই!</b>\n\n"
-            f"<b>{PRODUCT_NAME}</b> এর এক্সেস পেতে নিচের বাটনে ক্লিক করে প্ল্যান সিলেক্ট করুন।"
+            f"{em_crs} <b>আপনার কোনো অ্যাক্টিভ VIP মেম্বারশিপ নেই!</b>\n\n"
+            f"{box_border}\n"
+            f"{em_usr} <b>Customer ID:</b> <code>#{user_id}</code>\n"
+            f"{em_shd} <b>Account Tier:</b> <code>Unverified Guest</code>\n"
+            f"{em_ord} <b>Active Plan:</b> <code>None</code>\n"
+            f"{box_border}\n\n"
+            f"🏛️ <b>{PRODUCT_NAME}</b> এর আনলিমিটেড কোর্স এক্সেস পেতে নিচের বাটনে ক্লিক করে আপনার পছন্দের প্ল্যানটি বেছে নিন।"
         )
         markup = InlineKeyboardMarkup([[InlineKeyboardButton("👑 View Plans", callback_data="plans_menu")]])
-        await update.message.reply_text(text, parse_mode="HTML", reply_markup=markup)
+        if update.callback_query:
+            await update.callback_query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
+        elif update.message:
+            await update.message.reply_text(text, parse_mode="HTML", reply_markup=markup)
         return
 
     # User has active plan
     now = datetime.datetime.now(datetime.timezone.utc)
     if sub["is_lifetime"]:
-        time_left = "👑 <b>Lifetime Unlimited</b> (Never Expires)"
+        time_left = f"{em_crw} <b>Lifetime Unlimited</b> (Never Expires)"
         expiry_str = "চিরস্থায়ী এক্সেস"
     else:
         expiry_dt = datetime.datetime.fromisoformat(sub["expires_at"])
@@ -548,38 +593,54 @@ async def cmd_myplan(update: Update, context: ContextTypes.DEFAULT_TYPE):
             time_left = "⚠️ <i>Expired (Awaiting Auto-Kick)</i>"
 
     text = (
-        f"👤 <b>আপনার মেম্বারশিপ বিস্তারিত:</b>\n\n"
-        f"📚 <b>প্রোডাক্ট:</b> {PRODUCT_NAME}\n"
-        f"📦 <b>প্ল্যান:</b> {sub['plan_name']}\n"
+        f"{em_dia} <b>আপনার VIP মেম্বারশিপ বিস্তারিত:</b> {em_crw}\n"
+        f"{box_border}\n"
+        f"{em_usr} <b>Customer ID:</b> <code>#{user_id}</code>\n"
+        f"{em_shd} <b>Account Tier:</b> <code>👑 Verified VIP Member</code>\n"
+        f"{em_ord} <b>Active Plan:</b> <b>{sub['plan_name']}</b>\n"
         f"📅 <b>মেয়াদ শেষ:</b> <code>{expiry_str}</code>\n"
         f"⏱️ <b>বাকি সময়:</b> {time_left}\n"
-        f"🟢 <b>স্ট্যাটাস:</b> Active\n\n"
-        f"<i>মেয়াদ শেষ হওয়ার আগেই রিনিউ করে নিরবচ্ছিন্ন এক্সেস নিশ্চিত করুন।</i>"
+        f"{em_chk} <b>স্ট্যাটাস:</b> <code>Active & Protected</code>\n"
+        f"{box_border}\n\n"
+        f"<i>মেয়াদ শেষ হওয়ার আগেই রিনিউ করে নিরবচ্ছিন্ন এক্সেস বজায় রাখুন।</i>"
     )
 
     markup = InlineKeyboardMarkup([
         [InlineKeyboardButton("🔄 Renew Subscription", callback_data="user_renew")],
         [InlineKeyboardButton("🔙 Back to Main Menu", callback_data="main_menu")],
     ])
-    await update.message.reply_text(text, parse_mode="HTML", reply_markup=markup)
+    if update.callback_query:
+        await update.callback_query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
+    elif update.message:
+        await update.message.reply_text(text, parse_mode="HTML", reply_markup=markup)
 
 
 # =============================================================================
 # PLANS & PAYMENT INTERACTIVE FLOW
 # =============================================================================
 async def render_plans_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    em_crw = em_tag("crown", "👑")
+    em_dia = em_tag("diamond", "💎")
+    em_fire = em_tag("fire", "🔥")
+    em_zap = em_tag("zap", "⚡")
+    em_ord = em_tag("orders", "📦")
+    box_border = "━━━━━━━━━━━━━━━━━━━━"
+
     text = (
-        f"👑 <b>{PRODUCT_NAME} — মেম্বারশিপ প্ল্যানস</b>\n\n"
-        f"আপনার পছন্দের প্ল্যানটি বেছে নিন:\n\n"
-        f"<b>১. 📅 Monthly Access (30 Days)</b>\n"
+        f"{em_crw} <b>{PRODUCT_NAME} — VIP PLANS & PRICING</b> {em_dia}\n"
+        f"{box_border}\n"
+        f"আপনার পছন্দের প্রিমিয়াম প্ল্যানটি বেছে নিন:\n\n"
+        f"<b>১. 📅 Monthly VIP (30 Days)</b>\n"
         f"• ফুল কোর্স ভল্ট ও ডিসকাশন গ্রুপ এক্সেস\n"
-        f"• প্রাইস: <b>{PLANS['monthly']['price_bdt']} BDT / ${PLANS['monthly']['price_usdt']} USDT</b>\n\n"
-        f"<b>২. 📆 Yearly Access (365 Days)</b>\n"
-        f"• ৩৬৫ দিন নিরবচ্ছিন্ন আপডেট ও প্রায় ৬০% সেভিংস\n"
-        f"• প্রাইস: <b>{PLANS['yearly']['price_bdt']} BDT / ${PLANS['yearly']['price_usdt']} USDT</b>\n\n"
-        f"<b>৩. 👑 Lifetime Access (Forever)</b>\n"
-        f"• একবার কিনলে সারা জীবনের জন্য ফুল ফ্রি এক্সেস\n"
-        f"• প্রাইস: <b>{PLANS['lifetime']['price_bdt']} BDT / ${PLANS['lifetime']['price_usdt']} USDT</b>"
+        f"• ইনভেস্টমেন্ট: <b>{PLANS['monthly']['price_bdt']} BDT / ${PLANS['monthly']['price_usdt']} USDT</b>\n\n"
+        f"<b>২. 📆 Yearly VIP (365 Days)</b>\n"
+        f"• ৩৬৫ দিন নিরবচ্ছিন্ন আপডেট ও প্রায় ৬০% সেভিংস {em_fire}\n"
+        f"• ইনভেস্টমেন্ট: <b>{PLANS['yearly']['price_bdt']} BDT / ${PLANS['yearly']['price_usdt']} USDT</b>\n\n"
+        f"<b>৩. 👑 Lifetime Access (Forever VIP)</b>\n"
+        f"• একবার পেমেন্টে আজীবনের জন্য ফুল ফ্রি এক্সেস {em_zap}\n"
+        f"• ইনভেস্টমেন্ট: <b>{PLANS['lifetime']['price_bdt']} BDT / ${PLANS['lifetime']['price_usdt']} USDT</b>\n"
+        f"{box_border}\n"
+        f"👉 <i>যে প্ল্যানটি নিতে চান নিচের বাটনে ট্যাপ করুন:</i>"
     )
 
     keyboard = [
@@ -1136,18 +1197,23 @@ async def render_admin_dashboard(update: Update, context: ContextTypes.DEFAULT_T
     if not is_admin(user_id):
         return
 
-    stats = db.get_stats()
+    em_crw = em_tag("crown", "👑")
+    em_dia = em_tag("diamond", "💎")
+    em_set = em_tag("settings", "⚙️")
+    em_wal = em_tag("wallet", "💳")
+    em_usr = em_tag("referral", "👥")
+    box_border = "━━━━━━━━━━━━━━━━━━━━"
 
     text = (
-        f"👑 <b>PRO ACCESS VAULT — ADMIN CONTROL CENTER</b>\n"
-        f"════════════════════════════════════\n"
-        f"📊 <b>Active Subscribers:</b> {stats['total_active']}\n"
-        f"⏳ <b>Expiring within 24h:</b> {stats['expiring_24h']}\n"
-        f"👑 <b>Lifetime Members:</b> {stats['total_lifetime']}\n"
-        f"💀 <b>Removed / Expired:</b> {stats['total_removed']}\n"
-        f"💳 <b>Pending Payments:</b> {stats['pending_payments']}\n"
-        f"════════════════════════════════════\n"
-        f"<i>Select an operation below:</i>"
+        f"{em_crw} <b>{PRODUCT_NAME} — ADMIN CONTROL CENTER</b> {em_set}\n"
+        f"{box_border}\n"
+        f"{em_usr} <b>Active Subscribers:</b> <b>{stats['total_active']}</b> Members\n"
+        f"⏳ <b>Expiring within 24h:</b> <b>{stats['expiring_24h']}</b> Members\n"
+        f"{em_crw} <b>Lifetime Members:</b> <b>{stats['total_lifetime']}</b> Members\n"
+        f"💀 <b>Removed / Expired:</b> <b>{stats['total_removed']}</b> Users\n"
+        f"{em_wal} <b>Pending Payments:</b> <b>{stats['pending_payments']}</b> Requests\n"
+        f"{box_border}\n"
+        f"👉 <i>নিচের অপশনগুলো ব্যবহার করে পরিচালনা করুন:</i>"
     )
 
     keyboard = [
@@ -1751,25 +1817,10 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         is_subbed, unjoined_id, unjoined_link, unjoined_name = await check_force_sub(user_id, context)
         if is_subbed:
             await query.answer("✅ ধন্যবাদ! ভেরিফিকেশন সফল হয়েছে।", show_alert=True)
-            user = query.from_user
-            welcome_text = (
-                f"👋 <b>স্বাগতম, {user.first_name}!</b>\n\n"
-                f"🏛️ <b>{PRODUCT_NAME}</b> এ আপনাকে স্বাগতম।\n"
-                f"এখানে আপনি পাবেন সব এক্সক্লুসিভ কোর্স, সিক্রেট মেথডস, প্রিমিয়াম লেকচার এবং ভিআইপি সাপোর্ট।\n\n"
-                f"নিচের বাটনগুলো ব্যবহার করে প্ল্যান দেখুন অথবা আপনার মেম্বারশিপ স্ট্যাটাস চেক করুন:"
-            )
-            keyboard = [
-                [InlineKeyboardButton("👑 VIP Plans & Pricing", callback_data="plans_menu")],
-                [InlineKeyboardButton("👤 My Subscription Status", callback_data="user_status")],
-                [InlineKeyboardButton("💳 Payment Methods & Info", callback_data="payment_info")],
-            ]
-            if is_admin(user_id):
-                keyboard.append([InlineKeyboardButton("⚙️ Admin Control Panel", callback_data="admin_dashboard")])
-
-            await query.edit_message_text(welcome_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+            data = "main_menu"
         else:
             await query.answer("❌ আপনি এখনো চ্যানেলে জয়েন করেননি! দয়া করে চ্যানেলে জয়েন করে আবার ভেরিফাই করুন।", show_alert=True)
-        return
+            return
 
     # Verify force sub for any other callbacks from non-admin users
     if not is_admin(user_id):
@@ -1782,16 +1833,50 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     # 1. Main Navigation
     if data == "main_menu":
         await query.answer()
+        user = query.from_user
+        uid = user.id
+
+        em_crw = em_tag("crown", "👑")
+        em_dia = em_tag("diamond", "💎")
+        em_usr = em_tag("profile", "👤")
+        em_shd = em_tag("verify", "🛡️")
+        em_crs = em_tag("courses", "🎓")
+        em_chn = em_tag("broadcast", "📢")
+        em_grp = em_tag("referral", "👥")
+        em_wal = em_tag("wallet", "💳")
+        em_zap = em_tag("zap", "⚡")
+        em_chk = em_tag("check", "🟢")
+        em_sup = em_tag("support", "💬")
+
+        sub = db.get_subscriber(uid)
+        is_vip = sub and sub.get("status") == "active"
+        tier_label = f"👑 VIP ({sub['plan_name']})" if is_vip else "⭐ Free Guest"
+        status_text = "Active & Verified" if is_vip else "24/7 Instant Auto-Delivery"
+        box_border = "━━━━━━━━━━━━━━━━━━━━"
+
         welcome_text = (
-            f"🏛️ <b>{PRODUCT_NAME}</b>\n\n"
-            f"Select an option below to explore plans or check status:"
+            f"{em_crw} <b>{PRODUCT_NAME} — VIP HUB</b> {em_dia}\n"
+            f"<i>স্বাগতম, {html.escape(user.first_name or 'VIP Member')}! এক্সক্লুসিভ কোর্স ভল্ট ও প্রিমিয়াম হাব।</i>\n\n"
+            f"{box_border}\n"
+            f"{em_usr} <b>Customer ID:</b> <code>#{uid}</code>\n"
+            f"{em_shd} <b>Account Tier:</b> <code>{tier_label}</code>\n"
+            f"{em_chk} <b>Service Status:</b> <code>{status_text}</code>\n"
+            f"{em_zap} <b>Delivery:</b> <code>Anti-Leak 1-Time Invite Links</code>\n"
+            f"{box_border}\n\n"
+            f"🏛️ <b>VIP Vault Services:</b>\n"
+            f"• {em_crs} <b>Courses:</b> লাইফটাইম ক্লাউড ড্রাইভ ও সিক্রেট মেথডস\n"
+            f"• {em_chn} <b>VIP Channels:</b> প্রতিদিন নতুন কোর্স রিলিজ ও রিসোর্স\n"
+            f"• {em_grp} <b>VIP Groups:</b> সিক্রেট ডিসকাশন ও স্টুডেন্ট নেটওয়ার্ক\n"
+            f"• {em_sup} <b>Live Support:</b> ২৪/৭ ডিরেক্ট অ্যাডমিন অ্যাসিস্ট্যান্স\n\n"
+            f"👉 <i>নিচের বাটনগুলো ব্যবহার করে প্ল্যান ব্রাউজ বা অ্যাকাউন্ট পরিচালনা করুন:</i>"
         )
+
         keyboard = [
             [InlineKeyboardButton("👑 VIP Plans & Pricing", callback_data="plans_menu")],
             [InlineKeyboardButton("👤 My Subscription Status", callback_data="user_status")],
             [InlineKeyboardButton("💳 Payment Methods & Info", callback_data="payment_info")],
         ]
-        if is_admin(user_id):
+        if is_admin(uid):
             keyboard.append([InlineKeyboardButton("⚙️ Admin Control Panel", callback_data="admin_dashboard")])
 
         await query.edit_message_text(welcome_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
@@ -1803,47 +1888,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
 
     if data == "user_status":
         await query.answer()
-        # Delegate to status rendering
-        sub = db.get_subscriber(user_id)
-        if not sub or sub["status"] != "active":
-            text = (
-                f"❌ <b>আপনার কোনো অ্যাক্টিভ মেম্বারশিপ নেই!</b>\n\n"
-                f"<b>{PRODUCT_NAME}</b> এর এক্সেস পেতে নিচের বাটনে ক্লিক করে প্ল্যান সিলেক্ট করুন।"
-            )
-            markup = InlineKeyboardMarkup([[InlineKeyboardButton("👑 View Plans", callback_data="plans_menu")]])
-            await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
-            return
-
-        now = datetime.datetime.now(datetime.timezone.utc)
-        if sub["is_lifetime"]:
-            time_left = "👑 <b>Lifetime Unlimited</b> (Never Expires)"
-            expiry_str = "চিরস্থায়ী এক্সেস"
-        else:
-            expiry_dt = datetime.datetime.fromisoformat(sub["expires_at"])
-            expiry_str = expiry_dt.strftime("%d %b %Y, %I:%M %p (UTC)")
-            diff = expiry_dt - now
-            if diff.total_seconds() > 0:
-                days = diff.days
-                hours, remainder = divmod(diff.seconds, 3600)
-                minutes, _ = divmod(remainder, 60)
-                time_left = f"⏳ <b>{days} দিন, {hours} ঘণ্টা, {minutes} মিনিট বাকি</b>"
-            else:
-                time_left = "⚠️ <i>Expired (Awaiting Auto-Kick)</i>"
-
-        text = (
-            f"👤 <b>আপনার মেম্বারশিপ বিস্তারিত:</b>\n\n"
-            f"📚 <b>প্রোডাক্ট:</b> {PRODUCT_NAME}\n"
-            f"📦 <b>প্ল্যান:</b> {sub['plan_name']}\n"
-            f"📅 <b>মেয়াদ শেষ:</b> <code>{expiry_str}</code>\n"
-            f"⏱️ <b>বাকি সময়:</b> {time_left}\n"
-            f"🟢 <b>স্ট্যাটাস:</b> Active\n\n"
-            f"<i>মেয়াদ শেষ হওয়ার আগেই রিনিউ করে নিরবচ্ছিন্ন এক্সেস নিশ্চিত করুন।</i>"
-        )
-        markup = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔄 Renew Subscription", callback_data="user_renew")],
-            [InlineKeyboardButton("🔙 Back to Main Menu", callback_data="main_menu")],
-        ])
-        await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
+        await cmd_myplan(update, context)
         return
 
     if data == "user_renew":
