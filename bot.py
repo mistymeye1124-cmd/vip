@@ -222,7 +222,7 @@ async def generate_single_use_links(bot, user_id: int) -> List[Tuple[str, str]]:
             )
             links.append((ch_name, invite.invite_link))
         except BadRequest as e:
-            logger.error(f"Failed to create invite for {ch_name} ({ch_id}): {e.message}")
+            logger.error(f"Failed to create invite for {ch_name} ({ch_id}): {e}")
             links.append((ch_name, f"Error: Bot lacks 'Invite Users' admin rights in {ch_name}"))
         except Exception as e:
             logger.error(f"Invite creation error for {ch_name}: {e}")
@@ -241,14 +241,23 @@ async def deliver_welcome_access(bot, user_id: int, plan_name: str, expires_at_i
         dt = datetime.datetime.fromisoformat(expires_at_iso)
         duration_text = f"⏳ <b>মেয়াদ:</b> <code>{dt.strftime('%d %b %Y, %I:%M %p (UTC)')}</code>"
 
-    text = (
-        f"🎉 <b>অভিনন্দন! আপনার সাবস্ক্রিপশন অ্যাক্টিভ হয়েছে!</b>\n\n"
-        f"📚 <b>প্রোডাক্ট:</b> {PRODUCT_NAME}\n"
-        f"📦 <b>প্ল্যান:</b> {plan_name}\n"
-        f"{duration_text}\n\n"
-        f"🔐 <b>সিকিউর ওয়ান-টাইম এক্সেস লিংক:</b>\n"
-        f"<i>নিচের বাটনগুলোতে ক্লিক করে আপনার চ্যানেলগুলোতে দ্রুত জয়েন করুন। প্রতিটি লিংক মাত্র ১ বার ব্যবহারযোগ্য এবং ২৪ ঘণ্টা পর এক্সপায়ার হয়ে যাবে।</i>"
-    )
+    if not links:
+        text = (
+            f"🎉 <b>অভিনন্দন! আপনার সাবস্ক্রিপশন অ্যাক্টিভ হয়েছে!</b>\n\n"
+            f"📚 <b>প্রোডাক্ট:</b> {PRODUCT_NAME}\n"
+            f"📦 <b>প্ল্যান:</b> {plan_name}\n"
+            f"{duration_text}\n\n"
+            f"✅ <i>আপনার মেম্বারশিপ সফলভাবে ডাটাবেজে সক্রিয় হয়েছে। কোনো চ্যানেল লিংক না দেখতে পেলে অ্যাডমিনের সাথে যোগাযোগ করুন।</i>"
+        )
+    else:
+        text = (
+            f"🎉 <b>অভিনন্দন! আপনার সাবস্ক্রিপশন অ্যাক্টিভ হয়েছে!</b>\n\n"
+            f"📚 <b>প্রোডাক্ট:</b> {PRODUCT_NAME}\n"
+            f"📦 <b>প্ল্যান:</b> {plan_name}\n"
+            f"{duration_text}\n\n"
+            f"🔐 <b>সিকিউর ওয়ান-টাইম এক্সেস লিংক:</b>\n"
+            f"<i>নিচের বাটনগুলোতে ক্লিক করে আপনার চ্যানেলগুলোতে দ্রুত জয়েন করুন। প্রতিটি লিংক মাত্র ১ বার ব্যবহারযোগ্য এবং ২৪ ঘণ্টা পর এক্সপায়ার হয়ে যাবে।</i>"
+        )
 
     buttons = []
     for ch_name, link in links:
@@ -1605,10 +1614,11 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
 
     # Admin Payment Approval / Rejection
     if data.startswith("adm_app_"):
+        await query.answer("Processing approval...")
         req_id = int(data.replace("adm_app_", ""))
         req = db.get_payment_request(req_id)
         if not req or req["status"] != "pending":
-            await query.answer("Already processed!", show_alert=True)
+            await query.answer("This request has already been processed!", show_alert=True)
             return
 
         plan_key = req["plan_key"]
@@ -1628,38 +1638,70 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         )
         db.update_payment_status(req_id, "approved")
 
-        # Deliver links to the buyer
-        await deliver_welcome_access(context.bot, req["user_id"], plan["name"], sub["expires_at"], is_lifetime)
+        # Deliver links to the buyer safely
+        delivery_ok = False
+        try:
+            await deliver_welcome_access(context.bot, req["user_id"], plan["name"], sub["expires_at"], is_lifetime)
+            delivery_ok = True
+        except Exception as e:
+            logger.error(f"Failed to deliver links to user {req['user_id']}: {e}")
 
-        await query.edit_message_text(
+        dispatch_status = "🚀 1-Time Invite Links dispatched to member's DM." if delivery_ok else "⚠️ Member added in DB, but failed to DM links (User may have blocked bot)."
+        approved_text = (
             f"✅ <b>PAYMENT APPROVED (#{req_id})</b>\n\n"
-            f"👤 Member: <code>{req['user_id']}</code> (@{req['username']})\n"
+            f"👤 Member: <code>{req['user_id']}</code> (@{req['username'] or 'none'})\n"
             f"📦 Plan: <b>{plan['name']}</b>\n"
             f"🔢 Trx: <code>{req['trx_id']}</code>\n"
-            f"🚀 1-Time Invite Links dispatched to member's DM.\n"
-            f"👮 Approved by: @{query.from_user.username or query.from_user.id}",
-            parse_mode="HTML",
+            f"{dispatch_status}\n"
+            f"👮 Approved by: @{query.from_user.username or query.from_user.id}"
         )
+
+        try:
+            if query.message.photo:
+                await query.edit_message_caption(caption=approved_text, parse_mode="HTML")
+            else:
+                await query.edit_message_text(text=approved_text, parse_mode="HTML")
+        except Exception:
+            try:
+                await query.edit_message_caption(caption=approved_text, parse_mode="HTML")
+            except Exception:
+                pass
         return
 
     if data.startswith("adm_rej_"):
+        await query.answer("Processing rejection...")
         req_id = int(data.replace("adm_rej_", ""))
-        db.update_payment_status(req_id, "rejected")
         req = db.get_payment_request(req_id)
-        if req:
+        if not req or req["status"] != "pending":
+            await query.answer("This request has already been processed!", show_alert=True)
+            return
+
+        db.update_payment_status(req_id, "rejected")
+        try:
+            await context.bot.send_message(
+                chat_id=req["user_id"],
+                text=f"❌ Your payment submission (Trx: <code>{req['trx_id']}</code>) could not be verified by administration. Please contact support.",
+                parse_mode="HTML",
+            )
+        except Exception:
+            pass
+
+        rejected_text = (
+            f"❌ <b>Payment Rejected (#{req_id})</b>\n"
+            f"👤 Member: <code>{req['user_id']}</code>\n"
+            f"🔢 Trx: <code>{req['trx_id']}</code>\n"
+            f"👮 Action by: @{query.from_user.username or query.from_user.id}"
+        )
+        try:
+            if query.message.photo:
+                await query.edit_message_caption(caption=rejected_text, parse_mode="HTML")
+            else:
+                await query.edit_message_text(text=rejected_text, parse_mode="HTML")
+        except Exception:
             try:
-                await context.bot.send_message(
-                    chat_id=req["user_id"],
-                    text=f"❌ Your payment submission (Trx: <code>{req['trx_id']}</code>) could not be verified by administration. Please contact support.",
-                    parse_mode="HTML",
-                )
+                await query.edit_message_caption(caption=rejected_text, parse_mode="HTML")
             except Exception:
                 pass
-
-        await query.edit_message_text(
-            f"❌ <b>Payment Rejected (#{req_id})</b>\n👮 Action by: @{query.from_user.username or query.from_user.id}",
-            parse_mode="HTML",
-        )
         return
 
     # Admin Interactive Actions
