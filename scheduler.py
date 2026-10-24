@@ -128,7 +128,7 @@ class VaultScheduler:
                     kicked_channels.append(ch_name)
                 except BadRequest as e:
                     # Often "User not participant" or "Chat admin required"
-                    failed_channels.append(f"{ch_name} ({e.message})")
+                    failed_channels.append(f"{ch_name} ({str(e)})")
                 except Exception as e:
                     failed_channels.append(f"{ch_name} ({str(e)})")
 

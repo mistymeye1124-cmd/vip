@@ -19,6 +19,8 @@ import datetime
 import asyncio
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple
+from collections import deque
+import time
 
 # Ensure clean UTF-8 console output on Windows to prevent UnicodeEncodeError
 if sys.platform == "win32":
@@ -32,6 +34,9 @@ from telegram import (
     Update,
     InlineKeyboardMarkup,
     InlineKeyboardButton,
+    ReplyKeyboardMarkup,
+    KeyboardButton,
+    BotCommand,
     ChatMember,
     InputFile,
 )
@@ -56,6 +61,31 @@ logging.basicConfig(
     level=logging.INFO,
 )
 logger = logging.getLogger("vault_bot")
+
+
+class LiveLogBuffer(logging.Handler):
+    """In-memory thread-safe buffer capturing the latest log events for live admin diagnostics."""
+    def __init__(self, maxlen: int = 30):
+        super().__init__()
+        self.buffer: deque = deque(maxlen=maxlen)
+
+    def emit(self, record):
+        try:
+            msg = self.format(record)
+            self.buffer.append(msg)
+        except Exception:
+            pass
+
+    def get_logs(self, limit: int = 12) -> List[str]:
+        return list(self.buffer)[-limit:]
+
+    def clear(self):
+        self.buffer.clear()
+
+
+live_log_buffer = LiveLogBuffer(maxlen=40)
+live_log_buffer.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S"))
+logging.getLogger().addHandler(live_log_buffer)
 
 # Load Environment Variables (.env) with bulletproof fallback
 try:
@@ -103,6 +133,10 @@ PRODUCT_NAME: str = os.getenv("PRODUCT_NAME") or CONFIG.get("product_name", "Pro
 CONFIG["product_name"] = PRODUCT_NAME
 
 CHANNELS: List[Dict[str, Any]] = CONFIG.get("channels", [])
+for ch in CHANNELS:
+    if "type" not in ch:
+        ch["type"] = "channel"
+
 PLANS: Dict[str, Any] = CONFIG.get("plans", {})
 PAYMENT_INFO: Dict[str, str] = CONFIG.get("payment_info", {})
 
@@ -144,6 +178,17 @@ def save_config():
 
 def is_admin(user_id: int) -> bool:
     return user_id in ADMIN_IDS
+
+
+def get_persistent_menu(is_admin_user: bool = False) -> ReplyKeyboardMarkup:
+    """Constructs the high-aesthetic persistent bottom reply keyboard."""
+    keyboard = [
+        [KeyboardButton("👑 VIP Plans & Pricing"), KeyboardButton("💳 Payment Methods")],
+        [KeyboardButton("👤 My Subscription"), KeyboardButton("📢 Official Channel")],
+    ]
+    if is_admin_user:
+        keyboard.append([KeyboardButton("⚙️ Admin Control Panel")])
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, is_persistent=True)
 
 
 # =============================================================================
@@ -201,11 +246,11 @@ def parse_duration(text: str) -> Tuple[int, str, bool]:
 # =============================================================================
 # 1-TIME INVITE LINK GENERATOR
 # =============================================================================
-async def generate_single_use_links(bot, user_id: int) -> List[Tuple[str, str]]:
+async def generate_single_use_links(bot, user_id: int) -> List[Dict[str, Any]]:
     """
-    Creates individual single-use invite links (member_limit=1) for each channel.
+    Creates individual single-use invite links (member_limit=1) for each channel and group.
     Links expire in 24 hours if not clicked.
-    Returns: List of (channel_name, invite_url)
+    Returns: List of dicts with name, url, type, id, error
     """
     links = []
     expire_date = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=24)
@@ -213,6 +258,7 @@ async def generate_single_use_links(bot, user_id: int) -> List[Tuple[str, str]]:
     for ch in CHANNELS:
         ch_id = ch["id"]
         ch_name = ch.get("name", str(ch_id))
+        ch_type = ch.get("type", "channel")
         try:
             invite = await bot.create_chat_invite_link(
                 chat_id=ch_id,
@@ -220,19 +266,37 @@ async def generate_single_use_links(bot, user_id: int) -> List[Tuple[str, str]]:
                 member_limit=1,
                 expire_date=expire_date,
             )
-            links.append((ch_name, invite.invite_link))
+            links.append({
+                "id": ch_id,
+                "name": ch_name,
+                "type": ch_type,
+                "url": invite.invite_link,
+                "error": None,
+            })
         except BadRequest as e:
             logger.error(f"Failed to create invite for {ch_name} ({ch_id}): {e}")
-            links.append((ch_name, f"Error: Bot lacks 'Invite Users' admin rights in {ch_name}"))
+            links.append({
+                "id": ch_id,
+                "name": ch_name,
+                "type": ch_type,
+                "url": None,
+                "error": f"Bot lacks 'Invite Users' admin rights in {ch_name}",
+            })
         except Exception as e:
             logger.error(f"Invite creation error for {ch_name}: {e}")
-            links.append((ch_name, "Error generating link"))
+            links.append({
+                "id": ch_id,
+                "name": ch_name,
+                "type": ch_type,
+                "url": None,
+                "error": "Error generating link",
+            })
 
     return links
 
 
 async def deliver_welcome_access(bot, user_id: int, plan_name: str, expires_at_iso: str, is_lifetime: bool):
-    """Sends the rich welcome card with 1-time channel buttons to the user."""
+    """Sends the rich welcome card with 1-time channel and group buttons to the user."""
     links = await generate_single_use_links(bot, user_id)
 
     if is_lifetime:
@@ -247,7 +311,7 @@ async def deliver_welcome_access(bot, user_id: int, plan_name: str, expires_at_i
             f"📚 <b>প্রোডাক্ট:</b> {PRODUCT_NAME}\n"
             f"📦 <b>প্ল্যান:</b> {plan_name}\n"
             f"{duration_text}\n\n"
-            f"✅ <i>আপনার মেম্বারশিপ সফলভাবে ডাটাবেজে সক্রিয় হয়েছে। কোনো চ্যানেল লিংক না দেখতে পেলে অ্যাডমিনের সাথে যোগাযোগ করুন।</i>"
+            f"✅ <i>আপনার মেম্বারশিপ সফলভাবে ডাটাবেজে সক্রিয় হয়েছে। কোনো চ্যানেল বা গ্রুপ লিংক না দেখতে পেলে অ্যাডমিনের সাথে যোগাযোগ করুন।</i>"
         )
     else:
         text = (
@@ -256,15 +320,29 @@ async def deliver_welcome_access(bot, user_id: int, plan_name: str, expires_at_i
             f"📦 <b>প্ল্যান:</b> {plan_name}\n"
             f"{duration_text}\n\n"
             f"🔐 <b>সিকিউর ওয়ান-টাইম এক্সেস লিংক:</b>\n"
-            f"<i>নিচের বাটনগুলোতে ক্লিক করে আপনার চ্যানেলগুলোতে দ্রুত জয়েন করুন। প্রতিটি লিংক মাত্র ১ বার ব্যবহারযোগ্য এবং ২৪ ঘণ্টা পর এক্সপায়ার হয়ে যাবে।</i>"
+            f"<i>নিচের বাটনগুলোতে ক্লিক করে আপনার চ্যানেল ও গ্রুপগুলোতে দ্রুত জয়েন করুন। প্রতিটি লিংক মাত্র ১ বার ব্যবহারযোগ্য এবং ২৪ ঘণ্টা পর এক্সপায়ার হয়ে যাবে।</i>"
         )
 
     buttons = []
-    for ch_name, link in links:
-        if link.startswith("https://"):
-            buttons.append([InlineKeyboardButton(f"🔹 {ch_name}", url=link)])
-        else:
-            text += f"\n\n⚠️ {ch_name}: {link}"
+    # 1. VIP Channels first
+    for item in links:
+        if item.get("type") == "channel":
+            url = item.get("url")
+            name = item.get("name")
+            if url and url.startswith("https://"):
+                buttons.append([InlineKeyboardButton(f"📢 {name} (Course Vault)", url=url)])
+            else:
+                text += f"\n\n⚠️ 📢 {name}: {item.get('error', 'Link error')}"
+
+    # 2. VIP Groups second
+    for item in links:
+        if item.get("type") == "group":
+            url = item.get("url")
+            name = item.get("name")
+            if url and url.startswith("https://"):
+                buttons.append([InlineKeyboardButton(f"👥 {name} (Discussion Group)", url=url)])
+            else:
+                text += f"\n\n⚠️ 👥 {name}: {item.get('error', 'Link error')}"
 
     buttons.append([InlineKeyboardButton("👤 My Subscription Status", callback_data="user_status")])
 
@@ -406,6 +484,16 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_admin(user_id):
         keyboard.append([InlineKeyboardButton("⚙️ Admin Control Panel", callback_data="admin_dashboard")])
 
+    # Pin persistent bottom navigation menu bar
+    try:
+        await update.message.reply_text(
+            f"🏛️ <b>{PRODUCT_NAME}</b>\n<i>Navigation menu loaded below.</i>",
+            parse_mode="HTML",
+            reply_markup=get_persistent_menu(is_admin(user_id)),
+        )
+    except Exception:
+        pass
+
     await update.message.reply_text(
         text=welcome_text,
         parse_mode="HTML",
@@ -500,6 +588,60 @@ async def render_plans_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
 
 
+async def send_payment_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Sends the official payment guide and credentials card."""
+    bkash_num = PAYMENT_INFO.get("bkash", "01718539406")
+    nagad_num = PAYMENT_INFO.get("nagad", "01718539406")
+    binance_id = PAYMENT_INFO.get("binance_pay_id", "892612368")
+    usdt_addr = PAYMENT_INFO.get("usdt_trc20", "TNPg8qkhm1xQsMNsgvH6p71tNwVXV7qaJe")
+
+    text = (
+        f"💳 <b>অফিশিয়াল পেমেন্ট মেথডস ও গাইড</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"🔹 <b>bKash (Agent - Cash Out Only):</b>\n"
+        f"👉 <code>{bkash_num}</code>\n\n"
+        f"🔹 <b>Nagad (Agent - Cash Out Only):</b>\n"
+        f"👉 <code>{nagad_num}</code>\n\n"
+        f"⚠️ <b>জরুরি সতর্কতা:</b>\n"
+        f"✔️ <b>bkash, Nagad Cashout Only (Agent)</b>\n"
+        f"👆 <b>শুধুমাত্র ক্যাশআউট করবেন</b> (Send Money গ্রহণযোগ্য নয়)।\n\n"
+        f"🔹 <b>Binance Pay ID:</b>\n"
+        f"👉 <code>{binance_id}</code>\n\n"
+        f"🔹 <b>Usdt Trx (Trc20):</b>\n"
+        f"👉 <code>{usdt_addr}</code>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"➡️ <b>Send ScreenShot Must</b>\n"
+        f"টাকা পাঠানোর পর '👑 Select Plan & Pay' তে গিয়ে প্ল্যান সিলেক্ট করে স্ক্রিনশট ও Trx ID সাবমিট করুন।"
+    )
+    markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("👑 Select Plan & Pay", callback_data="plans_menu")],
+        [InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu")],
+    ])
+    if update.callback_query:
+        await update.callback_query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
+    elif update.message:
+        await update.message.reply_text(text, parse_mode="HTML", reply_markup=markup)
+
+
+async def send_official_channel_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Sends the official announcement channel details."""
+    channel_link = FORCE_CHANNEL_LINK or "https://t.me/PAV_CourseEdition"
+    channel_name = FORCE_CHANNEL_NAME or "Pro Access Vault - Course Edition"
+    text = (
+        f"📢 <b>{channel_name}</b>\n\n"
+        f"আমাদের অফিশিয়াল চ্যানেলে যুক্ত থাকুন সব সর্বশেষ কোর্স রিলিজ, সিক্রেট মেথড আপডেট এবং স্পেশাল অফার পেতে।\n\n"
+        f"🔗 <b>অফিশিয়াল লিংক:</b> {channel_link}"
+    )
+    markup = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📢 Open Official Channel", url=channel_link)],
+        [InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu")],
+    ])
+    if update.callback_query:
+        await update.callback_query.edit_message_text(text, parse_mode="HTML", reply_markup=markup, disable_web_page_preview=True)
+    elif update.message:
+        await update.message.reply_text(text, parse_mode="HTML", reply_markup=markup, disable_web_page_preview=True)
+
+
 async def handle_buy_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan_key: str):
     query = update.callback_query
     await query.answer()
@@ -570,6 +712,28 @@ async def handle_user_text_message(update: Update, context: ContextTypes.DEFAULT
         if not is_subbed:
             await send_force_sub_message(update, context, unjoined_link, unjoined_name)
             return
+
+    msg_text = update.message.text.strip() if update.message.text else ""
+
+    # Persistent Bottom Menu Bar Intercepts (Always Active)
+    if msg_text in ("👑 VIP Plans & Pricing", "👑 VIP Plans", "VIP Plans & Pricing", "/plans"):
+        await render_plans_menu(update, context)
+        return
+    if msg_text in ("💳 Payment Methods", "💳 Payment Info", "Payment Methods & Info", "/payment"):
+        await send_payment_info(update, context)
+        return
+    if msg_text in ("👤 My Subscription", "👤 My Plan", "My Subscription Status", "/myplan"):
+        await cmd_myplan(update, context)
+        return
+    if msg_text in ("📢 Official Channel", "📢 Channel", "Official Channel"):
+        await send_official_channel_info(update, context)
+        return
+    if msg_text in ("⚙️ Admin Control Panel", "⚙️ Admin Panel", "/admin"):
+        if is_admin(user_id):
+            await render_admin_dashboard(update, context)
+        else:
+            await update.message.reply_text("⛔ You are not authorized to access the Admin Control Panel.")
+        return
 
     state = USER_STATES.get(user_id)
 
@@ -889,6 +1053,7 @@ async def handle_user_text_message(update: Update, context: ContextTypes.DEFAULT
             for ch in CHANNELS:
                 if ch["id"] == ch_id:
                     ch["name"] = ch_name
+                    ch["type"] = "channel"
                     save_config()
                     await update.message.reply_text(f"✅ Channel <code>{ch_id}</code> updated to: <b>{ch_name}</b>", parse_mode="HTML")
                     return
@@ -899,11 +1064,12 @@ async def handle_user_text_message(update: Update, context: ContextTypes.DEFAULT
             except Exception as e:
                 status_text = f"⚠️ Could not verify admin rights: {e}"
 
-            CHANNELS.append({"id": ch_id, "name": ch_name, "invite_expire_hours": 24})
+            CHANNELS.append({"id": ch_id, "name": ch_name, "type": "channel", "invite_expire_hours": 24})
             save_config()
+            db.log_activity(user_id, "CHANNEL_ADDED", f"Channel: {ch_name} ({ch_id})")
             await update.message.reply_text(
                 f"✅ <b>VIP Channel Added!</b>\n"
-                f"📚 Name: <b>{ch_name}</b>\n"
+                f"📢 Name: <b>{ch_name}</b>\n"
                 f"🆔 ID: <code>{ch_id}</code>\n"
                 f"⚙️ Status: {status_text}",
                 parse_mode="HTML",
@@ -912,6 +1078,45 @@ async def handle_user_text_message(update: Update, context: ContextTypes.DEFAULT
             await update.message.reply_text("❌ Invalid channel ID. Must be numeric (e.g. -1001234567890).")
         except Exception as e:
             await update.message.reply_text(f"❌ Error adding channel: {e}")
+        return
+
+    # 8. Admin Awaiting Group Input
+    if action == "admin_awaiting_group_input":
+        text_in = update.message.text.strip()
+        USER_STATES.pop(user_id, None)
+        parts = text_in.split(maxsplit=1)
+        try:
+            grp_id = int(parts[0])
+            grp_name = parts[1] if len(parts) > 1 else f"Group {grp_id}"
+
+            for ch in CHANNELS:
+                if ch["id"] == grp_id:
+                    ch["name"] = grp_name
+                    ch["type"] = "group"
+                    save_config()
+                    await update.message.reply_text(f"✅ Group <code>{grp_id}</code> updated to: <b>{grp_name}</b>", parse_mode="HTML")
+                    return
+
+            try:
+                member = await context.bot.get_chat_member(chat_id=grp_id, user_id=context.bot.id)
+                status_text = "✅ Bot is Admin in Group" if member.status in ("administrator", "creator") else "⚠️ Bot is NOT admin in group yet!"
+            except Exception as e:
+                status_text = f"⚠️ Could not verify admin rights: {e}"
+
+            CHANNELS.append({"id": grp_id, "name": grp_name, "type": "group", "invite_expire_hours": 24})
+            save_config()
+            db.log_activity(user_id, "GROUP_ADDED", f"Group: {grp_name} ({grp_id})")
+            await update.message.reply_text(
+                f"✅ <b>VIP Discussion Group Added!</b>\n"
+                f"👥 Name: <b>{grp_name}</b>\n"
+                f"🆔 ID: <code>{grp_id}</code>\n"
+                f"⚙️ Status: {status_text}",
+                parse_mode="HTML",
+            )
+        except ValueError:
+            await update.message.reply_text("❌ Invalid group ID. Must be numeric (e.g. -1001234567890).")
+        except Exception as e:
+            await update.message.reply_text(f"❌ Error adding group: {e}")
         return
 
 
@@ -953,15 +1158,19 @@ async def render_admin_dashboard(update: Update, context: ContextTypes.DEFAULT_T
         ],
         [
             InlineKeyboardButton("➕ Add VIP Channel", callback_data="adm_action_add_channel"),
-            InlineKeyboardButton("🗑️ Del VIP Channel", callback_data="adm_action_del_channel"),
+            InlineKeyboardButton("➕ Add VIP Group", callback_data="adm_action_add_group"),
+        ],
+        [
+            InlineKeyboardButton("🗑️ Del Channel/Group", callback_data="adm_action_del_channel"),
+            InlineKeyboardButton(f"⚙️ Channels & Groups ({len(CHANNELS)})", callback_data="adm_action_channels"),
         ],
         [
             InlineKeyboardButton("💳 Edit Payments", callback_data="adm_action_edit_payments"),
-            InlineKeyboardButton(f"⚙️ Channels List ({len(CHANNELS)})", callback_data="adm_action_channels"),
+            InlineKeyboardButton("💾 Backup DB Now", callback_data="adm_action_backup"),
         ],
         [
-            InlineKeyboardButton("💾 Backup Database Now", callback_data="adm_action_backup"),
             InlineKeyboardButton("📢 Broadcast DM", callback_data="adm_action_broadcast"),
+            InlineKeyboardButton("📋 Live System Logs & Diagnostics", callback_data="adm_action_logs"),
         ],
         [
             InlineKeyboardButton("🔙 Main Menu", callback_data="main_menu"),
@@ -1272,6 +1481,7 @@ async def cmd_addchannel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for ch in CHANNELS:
             if ch["id"] == ch_id:
                 ch["name"] = ch_name
+                ch["type"] = "channel"
                 save_config()
                 await update.message.reply_text(
                     f"✅ Channel <code>{ch_id}</code> updated with name: <b>{ch_name}</b>",
@@ -1287,12 +1497,13 @@ async def cmd_addchannel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             admin_status_text = f"⚠️ Could not verify bot admin status: {e}"
 
-        CHANNELS.append({"id": ch_id, "name": ch_name, "invite_expire_hours": 24})
+        CHANNELS.append({"id": ch_id, "name": ch_name, "type": "channel", "invite_expire_hours": 24})
         save_config()
+        db.log_activity(update.effective_user.id, "CHANNEL_ADDED", f"Channel: {ch_name} ({ch_id})")
 
         await update.message.reply_text(
             f"✅ <b>VIP Channel Added Successfully!</b>\n"
-            f"📚 <b>Name:</b> {ch_name}\n"
+            f"📢 <b>Name:</b> {ch_name}\n"
             f"🆔 <b>ID:</b> <code>{ch_id}</code>\n"
             f"⚙️ <b>Status:</b> {admin_status_text}\n\n"
             f"<i>This channel is now active for 1-time invite links and auto-kicks!</i>",
@@ -1304,13 +1515,69 @@ async def cmd_addchannel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Error adding channel: {e}")
 
 
-async def cmd_delchannel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Usage: /delchannel <channel_id>"""
+async def cmd_addgroup(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Usage: /addgroup <group_id> [group_name]"""
     if not is_admin(update.effective_user.id):
         return
     args = context.args
     if not args:
-        await update.message.reply_text("<b>Usage:</b> <code>/delchannel &lt;channel_id&gt;</code>", parse_mode="HTML")
+        await update.message.reply_text(
+            "<b>Usage:</b> <code>/addgroup &lt;group_id&gt; [name]</code>\n"
+            "<b>Example:</b> <code>/addgroup -1001234567890 VIP Support & Discussion Group</code>\n"
+            "<i>Note: The bot MUST be an Administrator in the group with 'Invite Users' and 'Ban Users' rights.</i>",
+            parse_mode="HTML",
+        )
+        return
+
+    try:
+        grp_id = int(args[0])
+        grp_name = " ".join(args[1:]) if len(args) > 1 else f"Group {grp_id}"
+
+        # Check if already exists
+        for ch in CHANNELS:
+            if ch["id"] == grp_id:
+                ch["name"] = grp_name
+                ch["type"] = "group"
+                save_config()
+                await update.message.reply_text(
+                    f"✅ Group <code>{grp_id}</code> updated with name: <b>{grp_name}</b>",
+                    parse_mode="HTML",
+                )
+                return
+
+        # Test Bot Permissions in that group
+        try:
+            member = await context.bot.get_chat_member(chat_id=grp_id, user_id=context.bot.id)
+            is_bot_admin = member.status in ("administrator", "creator")
+            admin_status_text = "✅ Bot is Admin in Group" if is_bot_admin else "⚠️ Warning: Bot is NOT admin in this group yet!"
+        except Exception as e:
+            admin_status_text = f"⚠️ Could not verify bot admin status: {e}"
+
+        CHANNELS.append({"id": grp_id, "name": grp_name, "type": "group", "invite_expire_hours": 24})
+        save_config()
+        db.log_activity(update.effective_user.id, "GROUP_ADDED", f"Group: {grp_name} ({grp_id})")
+
+        await update.message.reply_text(
+            f"✅ <b>VIP Discussion Group Added Successfully!</b>\n"
+            f"👥 <b>Name:</b> {grp_name}\n"
+            f"🆔 <b>ID:</b> <code>{grp_id}</code>\n"
+            f"⚙️ <b>Status:</b> {admin_status_text}\n\n"
+            f"<i>This group is now active for 1-time invite links and auto-kicks!</i>",
+            parse_mode="HTML",
+        )
+    except ValueError:
+        await update.message.reply_text("❌ Invalid Group ID! Must be a numeric ID (usually starts with -100).")
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error adding group: {e}")
+
+
+async def cmd_delchannel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Usage: /delchannel <channel_or_group_id>"""
+    if not is_admin(update.effective_user.id):
+        return
+    args = context.args
+    if not args:
+        await update.message.reply_text("<b>Usage:</b> <code>/delchannel &lt;channel_or_group_id&gt;</code>", parse_mode="HTML")
         return
 
     try:
@@ -1320,35 +1587,50 @@ async def cmd_delchannel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if len(CHANNELS) < initial_len:
             save_config()
-            await update.message.reply_text(f"🗑️ Channel <code>{ch_id}</code> removed from bot management.", parse_mode="HTML")
+            await update.message.reply_text(f"🗑️ Channel/Group <code>{ch_id}</code> removed from bot management.", parse_mode="HTML")
         else:
-            await update.message.reply_text(f"❌ Channel <code>{ch_id}</code> not found in configured list.", parse_mode="HTML")
+            await update.message.reply_text(f"❌ ID <code>{ch_id}</code> not found in configured list.", parse_mode="HTML")
     except ValueError:
-        await update.message.reply_text("❌ Invalid Channel ID.")
+        await update.message.reply_text("❌ Invalid ID.")
 
 
 async def cmd_channels(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Lists all managed VIP channels with status check."""
+    """Lists all managed VIP channels and discussion groups with status check."""
     if not is_admin(update.effective_user.id):
         return
 
-    if not CHANNELS:
-        await update.message.reply_text(
-            "ℹ️ No VIP channels configured yet.\nUse <code>/addchannel &lt;id&gt; &lt;name&gt;</code> to add one!",
-            parse_mode="HTML",
-        )
-        return
+    channels_list = [c for c in CHANNELS if c.get("type", "channel") == "channel"]
+    groups_list = [c for c in CHANNELS if c.get("type") == "group"]
 
-    lines = ["⚙️ <b>CONFIGURED VIP CHANNELS:</b>\n"]
-    for idx, ch in enumerate(CHANNELS, 1):
-        ch_id = ch["id"]
-        ch_name = ch.get("name", str(ch_id))
-        try:
-            member = await context.bot.get_chat_member(chat_id=ch_id, user_id=context.bot.id)
-            status = "✅ Admin" if member.status in ("administrator", "creator") else "⚠️ Not Admin"
-        except Exception as e:
-            status = f"❌ Error: {e}"
-        lines.append(f"{idx}. <b>{ch_name}</b>\n   ID: <code>{ch_id}</code> | Status: {status}\n")
+    lines = ["⚙️ <b>CONFIGURED VIP DESTINATIONS:</b>\n"]
+
+    lines.append(f"📢 <b>VIP BROADCAST CHANNELS ({len(channels_list)}):</b>")
+    if not channels_list:
+        lines.append("<i>• No broadcast channels configured. (Use /addchannel)</i>")
+    else:
+        for idx, ch in enumerate(channels_list, 1):
+            ch_id = ch["id"]
+            ch_name = ch.get("name", str(ch_id))
+            try:
+                member = await context.bot.get_chat_member(chat_id=ch_id, user_id=context.bot.id)
+                status = "✅ Admin" if member.status in ("administrator", "creator") else "⚠️ Not Admin"
+            except Exception as e:
+                status = f"❌ Error: {e}"
+            lines.append(f"  {idx}. <b>{ch_name}</b>\n     ID: <code>{ch_id}</code> | Status: {status}")
+
+    lines.append(f"\n👥 <b>VIP DISCUSSION GROUPS ({len(groups_list)}):</b>")
+    if not groups_list:
+        lines.append("<i>• No discussion groups configured. (Use /addgroup)</i>")
+    else:
+        for idx, grp in enumerate(groups_list, 1):
+            grp_id = grp["id"]
+            grp_name = grp.get("name", str(grp_id))
+            try:
+                member = await context.bot.get_chat_member(chat_id=grp_id, user_id=context.bot.id)
+                status = "✅ Admin" if member.status in ("administrator", "creator") else "⚠️ Not Admin"
+            except Exception as e:
+                status = f"❌ Error: {e}"
+            lines.append(f"  {idx}. <b>{grp_name}</b>\n     ID: <code>{grp_id}</code> | Status: {status}")
 
     lines.append("\n📢 <b>FORCE JOIN CHANNEL (Mandatory):</b>")
     if FORCE_CHANNEL_ID:
@@ -1563,34 +1845,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
 
     if data == "payment_info":
         await query.answer()
-        bkash_num = PAYMENT_INFO.get("bkash", "01718539406")
-        nagad_num = PAYMENT_INFO.get("nagad", "01718539406")
-        binance_id = PAYMENT_INFO.get("binance_pay_id", "892612368")
-        usdt_addr = PAYMENT_INFO.get("usdt_trc20", "TNPg8qkhm1xQsMNsgvH6p71tNwVXV7qaJe")
-
-        text = (
-            f"💳 <b>অফিশিয়াল পেমেন্ট মেথডস ও গাইড</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"🔹 <b>bKash (Agent - Cash Out Only):</b>\n"
-            f"👉 <code>{bkash_num}</code>\n\n"
-            f"🔹 <b>Nagad (Agent - Cash Out Only):</b>\n"
-            f"👉 <code>{nagad_num}</code>\n\n"
-            f"⚠️ <b>জরুরি সতর্কতা:</b>\n"
-            f"✔️ <b>bkash, Nagad Cashout Only (Agent)</b>\n"
-            f"👆 <b>শুধুমাত্র ক্যাশআউট করবেন</b> (Send Money গ্রহণযোগ্য নয়)।\n\n"
-            f"🔹 <b>Binance Pay ID:</b>\n"
-            f"👉 <code>{binance_id}</code>\n\n"
-            f"🔹 <b>Usdt Trx (Trc20):</b>\n"
-            f"👉 <code>{usdt_addr}</code>\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"➡️ <b>Send ScreenShot Must</b>\n"
-            f"টাকা পাঠানোর পর '👑 Select Plan & Pay' তে গিয়ে প্ল্যান সিলেক্ট করে স্ক্রিনশট ও Trx ID সাবমিট করুন।"
-        )
-        markup = InlineKeyboardMarkup([
-            [InlineKeyboardButton("👑 Select Plan & Pay", callback_data="plans_menu")],
-            [InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu")],
-        ])
-        await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
+        await send_payment_info(update, context)
         return
 
     # Plan Selection Callbacks
@@ -1792,11 +2047,16 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
 
     if data == "adm_action_channels":
         await query.answer()
-        lines = ["⚙️ <b>CONFIGURED VIP CHANNELS:</b>\n"]
-        if not CHANNELS:
-            lines.append("<i>No VIP channels configured yet. Click 'Add VIP Channel' below or use /addchannel.</i>")
+        channels_list = [c for c in CHANNELS if c.get("type", "channel") == "channel"]
+        groups_list = [c for c in CHANNELS if c.get("type") == "group"]
+
+        lines = ["⚙️ <b>CONFIGURED VIP DESTINATIONS:</b>\n"]
+
+        lines.append(f"📢 <b>VIP BROADCAST CHANNELS ({len(channels_list)}):</b>")
+        if not channels_list:
+            lines.append("<i>• No broadcast channels configured yet.</i>")
         else:
-            for ch in CHANNELS:
+            for idx, ch in enumerate(channels_list, 1):
                 ch_id = ch["id"]
                 ch_name = ch.get("name", str(ch_id))
                 try:
@@ -1804,10 +2064,30 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                     status = "✅ Admin" if member.status in ("administrator", "creator") else "⚠️ Not Admin"
                 except Exception as e:
                     status = f"❌ Error: {e}"
-                lines.append(f"• <b>{ch_name}</b>\n  ID: <code>{ch_id}</code> | Status: {status}\n")
+                lines.append(f"  {idx}. <b>{ch_name}</b>\n     ID: <code>{ch_id}</code> | Status: {status}")
+
+        lines.append(f"\n👥 <b>VIP DISCUSSION GROUPS ({len(groups_list)}):</b>")
+        if not groups_list:
+            lines.append("<i>• No discussion groups configured yet.</i>")
+        else:
+            for idx, grp in enumerate(groups_list, 1):
+                grp_id = grp["id"]
+                grp_name = grp.get("name", str(grp_id))
+                try:
+                    member = await context.bot.get_chat_member(chat_id=grp_id, user_id=context.bot.id)
+                    status = "✅ Admin" if member.status in ("administrator", "creator") else "⚠️ Not Admin"
+                except Exception as e:
+                    status = f"❌ Error: {e}"
+                lines.append(f"  {idx}. <b>{grp_name}</b>\n     ID: <code>{grp_id}</code> | Status: {status}")
+
+        lines.append("\n📢 <b>FORCE JOIN CHANNEL:</b>")
+        if FORCE_CHANNEL_ID:
+            lines.append(f"• Name: <b>{FORCE_CHANNEL_NAME}</b>\n  ID: <code>{FORCE_CHANNEL_ID}</code>\n  Link: {FORCE_CHANNEL_LINK}")
+        else:
+            lines.append("• <i>Disabled / Not set</i>")
 
         markup = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Admin", callback_data="admin_dashboard")]])
-        await query.edit_message_text("\n".join(lines), parse_mode="HTML", reply_markup=markup)
+        await query.edit_message_text("\n".join(lines), parse_mode="HTML", reply_markup=markup, disable_web_page_preview=True)
         return
 
     if data == "adm_action_renew":
@@ -1930,23 +2210,148 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         )
         return
 
+    if data == "adm_action_add_group":
+        USER_STATES[user_id] = {"action": "admin_awaiting_group_input"}
+        await query.edit_message_text(
+            "➕ <b>Add VIP Discussion / Support Group</b>\n\n"
+            "Please send the <b>Group ID</b> and optional <b>Name</b>:\n"
+            "Example: <code>-1001234567890 VIP Support & Discussion</code>\n\n"
+            "<i>Make sure the bot is already an Admin in that group with 'Invite' and 'Ban' rights.\nType /cancel to abort.</i>",
+            parse_mode="HTML",
+        )
+        return
+
     if data == "adm_action_del_channel":
         if not CHANNELS:
-            await query.answer("No channels configured to delete!", show_alert=True)
+            await query.answer("No channels or groups configured to delete!", show_alert=True)
             return
         buttons = []
         for ch in CHANNELS:
-            buttons.append([InlineKeyboardButton(f"🗑️ Remove: {ch['name']}", callback_data=f"adm_confirm_del_ch_{ch['id']}")])
+            icon = "📢" if ch.get("type", "channel") == "channel" else "👥"
+            buttons.append([InlineKeyboardButton(f"🗑️ Remove {icon} {ch['name']}", callback_data=f"adm_confirm_del_ch_{ch['id']}")])
         buttons.append([InlineKeyboardButton("🔙 Back to Admin", callback_data="admin_dashboard")])
-        await query.edit_message_text("🗑️ <b>Select Channel to Remove:</b>", reply_markup=InlineKeyboardMarkup(buttons), parse_mode="HTML")
+        await query.edit_message_text("🗑️ <b>Select Channel or Group to Remove:</b>", reply_markup=InlineKeyboardMarkup(buttons), parse_mode="HTML")
         return
 
     if data.startswith("adm_confirm_del_ch_"):
         ch_id = int(data.replace("adm_confirm_del_ch_", ""))
         CHANNELS[:] = [ch for ch in CHANNELS if ch["id"] != ch_id]
         save_config()
-        await query.answer("Channel removed!", show_alert=True)
+        await query.answer("Destination removed!", show_alert=True)
         await render_admin_dashboard(update, context)
+        return
+
+    if data == "adm_action_clear_logs":
+        live_log_buffer.clear()
+        await query.answer("🧹 Live logs & error buffer cleared!", show_alert=True)
+        data = "adm_action_logs"
+
+    if data == "adm_action_logs":
+        await query.answer()
+
+        # 1. API Latency Test
+        t0 = time.perf_counter()
+        try:
+            await context.bot.get_me()
+            ping_ms = round((time.perf_counter() - t0) * 1000)
+            ping_status = f"🟢 Connected ({ping_ms}ms latency)"
+        except Exception as e:
+            ping_status = f"🔴 Telegram API Error: {e}"
+
+        # 2. Database Health
+        try:
+            db_size_kb = round(os.path.getsize(db.db_path) / 1024, 1)
+            db_status = f"🟢 Healthy (WAL Mode | Size: {db_size_kb} KB)"
+        except Exception as e:
+            db_status = f"⚠️ Status: {e}"
+
+        stats = db.get_stats()
+
+        # 3. Channels and Groups Audit
+        audit_lines = []
+        if not CHANNELS:
+            audit_lines.append("• <i>No VIP channels or groups configured yet.</i>")
+        else:
+            for ch in CHANNELS:
+                ch_id = ch["id"]
+                ch_name = ch.get("name", str(ch_id))
+                ch_type = ch.get("type", "channel")
+                icon = "📢" if ch_type == "channel" else "👥"
+                try:
+                    member = await context.bot.get_chat_member(chat_id=ch_id, user_id=context.bot.id)
+                    is_adm = member.status in ("administrator", "creator")
+                    if is_adm:
+                        can_inv = getattr(member, "can_invite_users", True)
+                        can_ban = getattr(member, "can_restrict_members", True)
+                        if can_inv and can_ban:
+                            perm_str = "🟢 OK (Invite: ✅ | Ban: ✅)"
+                        else:
+                            perm_str = f"⚠️ Limited (Invite: {'✅' if can_inv else '❌'} | Ban: {'✅' if can_ban else '❌'})"
+                    else:
+                        perm_str = "🔴 Bot is NOT Admin!"
+                except Exception as e:
+                    perm_str = f"🔴 Error: {str(e)[:30]}"
+                audit_lines.append(f"• {icon} <b>{ch_name}</b>: {perm_str}")
+
+        if FORCE_CHANNEL_ID:
+            try:
+                f_id = int(FORCE_CHANNEL_ID) if FORCE_CHANNEL_ID.lstrip("-").isdigit() else FORCE_CHANNEL_ID
+                f_mem = await context.bot.get_chat_member(chat_id=f_id, user_id=context.bot.id)
+                f_status = "🟢 Verified (Admin)" if f_mem.status in ("administrator", "creator") else "⚠️ Bot not admin"
+            except Exception as e:
+                f_status = f"⚠️ Warning ({str(e)[:25]})"
+            audit_lines.append(f"• 📢 <b>Force Join ({FORCE_CHANNEL_NAME})</b>: {f_status}")
+
+        # 4. Logs Box
+        mem_logs = live_log_buffer.get_logs(limit=8)
+        log_entries = []
+        if mem_logs:
+            for l in mem_logs:
+                log_entries.append(l.replace("<", "&lt;").replace(">", "&gt;"))
+        else:
+            recent_db = db.get_recent_logs(limit=6)
+            for r in recent_db:
+                ts = r['timestamp'][11:19] if len(r['timestamp']) >= 19 else r['timestamp']
+                log_entries.append(f"[{ts}] {r['action']}: {r['details']}")
+
+        if not log_entries:
+            log_box = "<i>No recent system events or errors recorded. System normal.</i>"
+        else:
+            log_box = "<pre>" + "\n".join(log_entries[-10:]) + "</pre>"
+
+        now_utc = datetime.datetime.now(datetime.timezone.utc).strftime("%H:%M:%S UTC")
+
+        diag_text = (
+            f"📋 <b>SYSTEM HEALTH &amp; LIVE DIAGNOSTICS</b>\n"
+            f"════════════════════════════════════\n"
+            f"⏱️ <b>Checked at:</b> <code>{now_utc}</code>\n"
+            f"⚡ <b>Telegram API:</b> {ping_status}\n"
+            f"💾 <b>Database Engine:</b> {db_status}\n\n"
+            f"📊 <b>LIVE METRICS:</b>\n"
+            f"• Active VIP Subscribers: <b>{stats['total_active']}</b>\n"
+            f"• Expiring within 24h: <b>{stats['expiring_24h']}</b>\n"
+            f"• Lifetime Members: <b>{stats['total_lifetime']}</b>\n"
+            f"• Pending Payment Approvals: <b>{stats['pending_payments']}</b>\n\n"
+            f"🛡️ <b>PERMISSIONS AUDIT:</b>\n"
+            + "\n".join(audit_lines) + "\n\n"
+            f"📋 <b>LIVE SYSTEM LOG STREAM:</b>\n"
+            f"{log_box}\n"
+            f"════════════════════════════════════"
+        )
+
+        keyboard = [
+            [
+                InlineKeyboardButton("🔄 Refresh Logs", callback_data="adm_action_logs"),
+                InlineKeyboardButton("🧹 Clear Buffer", callback_data="adm_action_clear_logs"),
+            ],
+            [
+                InlineKeyboardButton("🔙 Back to Admin", callback_data="admin_dashboard"),
+            ]
+        ]
+        try:
+            await query.edit_message_text(diag_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard), disable_web_page_preview=True)
+        except Exception:
+            pass
         return
 
     if data == "adm_action_edit_payments":
@@ -1981,10 +2386,22 @@ async def global_error_handler(update: object, context: ContextTypes.DEFAULT_TYP
 
 
 async def post_init(application: Application):
-    """Starts the 24/7 background scheduler when the bot launches."""
+    """Starts the 24/7 background scheduler and registers Telegram Menu commands."""
     scheduler = VaultScheduler(bot=application.bot, config=CONFIG)
     application.create_task(scheduler.start())
     logger.info("Background Auto-Kick Scheduler task created successfully.")
+
+    # Register official bot commands for the bottom-left Menu button
+    try:
+        await application.bot.set_my_commands([
+            BotCommand("start", "🚀 Main Menu & Plans"),
+            BotCommand("myplan", "👤 My Subscription Status"),
+            BotCommand("cancel", "❌ Cancel Current Action"),
+            BotCommand("admin", "⚙️ Admin Control Panel"),
+        ])
+        logger.info("Bot commands registered successfully.")
+    except Exception as e:
+        logger.warning(f"Failed to register bot commands: {e}")
 
 
 def main():
@@ -2021,6 +2438,8 @@ def main():
     # User Commands
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("myplan", cmd_myplan))
+    app.add_handler(CommandHandler("plans", render_plans_menu))
+    app.add_handler(CommandHandler("payment", send_payment_info))
     app.add_handler(CommandHandler("cancel", cmd_cancel))
 
     # Admin Commands
@@ -2033,7 +2452,9 @@ def main():
     app.add_handler(CommandHandler("backup", cmd_backup))
     app.add_handler(CommandHandler("broadcast", cmd_broadcast))
     app.add_handler(CommandHandler("addchannel", cmd_addchannel))
+    app.add_handler(CommandHandler("addgroup", cmd_addgroup))
     app.add_handler(CommandHandler("delchannel", cmd_delchannel))
+    app.add_handler(CommandHandler("delgroup", cmd_delchannel))
     app.add_handler(CommandHandler("channels", cmd_channels))
     app.add_handler(CommandHandler("setpayment", cmd_setpayment))
     app.add_handler(CommandHandler("setforcechannel", cmd_setforcechannel))
