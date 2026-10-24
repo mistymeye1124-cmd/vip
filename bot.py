@@ -734,19 +734,23 @@ async def render_plans_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     em_ord = em_tag("orders", "📦")
     box_border = "━━━━━━━━━━━━━━━━━━━━"
 
+    p_mon = PLANS.get("monthly", {"price_bdt": 1000, "price_usdt": 10})
+    p_yr = PLANS.get("yearly", {"price_bdt": 5000, "price_usdt": 50})
+    p_life = PLANS.get("lifetime", {"price_bdt": 8000, "price_usdt": 80})
+
     text = (
         f"{em_crw} <b>{PRODUCT_NAME} — VIP PLANS & PRICING</b> {em_dia}\n"
         f"{box_border}\n"
         f"আপনার পছন্দের প্রিমিয়াম প্ল্যানটি বেছে নিন:\n\n"
         f"<b>১. 📅 Monthly VIP (30 Days)</b>\n"
         f"• ফুল কোর্স ভল্ট ও ডিসকাশন গ্রুপ এক্সেস\n"
-        f"• ইনভেস্টমেন্ট: <b>{PLANS['monthly']['price_bdt']} BDT / ${PLANS['monthly']['price_usdt']} USDT</b>\n\n"
+        f"• ইনভেস্টমেন্ট: <b>{p_mon.get('price_bdt', 1000)} BDT / ${p_mon.get('price_usdt', 10)} USDT</b>\n\n"
         f"<b>২. 📆 Yearly VIP (365 Days)</b>\n"
         f"• ৩৬৫ দিন নিরবচ্ছিন্ন আপডেট ও প্রায় ৬০% সেভিংস {em_fire}\n"
-        f"• ইনভেস্টমেন্ট: <b>{PLANS['yearly']['price_bdt']} BDT / ${PLANS['yearly']['price_usdt']} USDT</b>\n\n"
+        f"• ইনভেস্টমেন্ট: <b>{p_yr.get('price_bdt', 5000)} BDT / ${p_yr.get('price_usdt', 50)} USDT</b>\n\n"
         f"<b>৩. 👑 Lifetime Access (Forever VIP)</b>\n"
         f"• একবার পেমেন্টে আজীবনের জন্য ফুল ফ্রি এক্সেস {em_zap}\n"
-        f"• ইনভেস্টমেন্ট: <b>{PLANS['lifetime']['price_bdt']} BDT / ${PLANS['lifetime']['price_usdt']} USDT</b>\n"
+        f"• ইনভেস্টমেন্ট: <b>{p_life.get('price_bdt', 8000)} BDT / ${p_life.get('price_usdt', 80)} USDT</b>\n"
         f"{box_border}\n"
         f"👉 <i>যে প্ল্যানটি নিতে চান নিচের বাটনে ট্যাপ করুন:</i>"
     )
@@ -1306,10 +1310,14 @@ async def handle_user_text_message(update: Update, context: ContextTypes.DEFAULT
             await update.message.reply_text("❌ Session expired or invalid plan. Please try again from /admin.")
             return
 
-        parts = text_in.split()
+        nums = re.findall(r"\d+", text_in)
+        if not nums:
+            await update.message.reply_text("❌ কোনো সংখ্যা পাওয়া যায়নি! অনুগ্রহ করে সংখ্যা লিখুন (যেমন: 500 অথবা 500 5)।")
+            return
+
         try:
-            bdt = int(parts[0])
-            usdt = int(parts[1]) if len(parts) > 1 else max(1, round(bdt / 100))
+            bdt = int(nums[0])
+            usdt = int(nums[1]) if len(nums) > 1 else max(1, round(bdt / 100))
 
             PLANS[plan_key]["price_bdt"] = bdt
             PLANS[plan_key]["price_usdt"] = usdt
@@ -1331,10 +1339,49 @@ async def handle_user_text_message(update: Update, context: ContextTypes.DEFAULT
                 parse_mode="HTML",
                 reply_markup=markup,
             )
-        except ValueError:
-            await update.message.reply_text("❌ অবৈধ সংখ্যা! শুধুমাত্র পূর্ণসংখ্যা লিখুন (যেমন: 500 অথবা 500 5)।")
         except Exception as e:
             await update.message.reply_text(f"❌ এরর: {e}")
+        return
+
+    # 10. Admin Awaiting Payment Input
+    if action == "admin_awaiting_payment_input":
+        text_in = update.message.text.strip()
+        pay_key = state.get("pay_key")
+        USER_STATES.pop(user_id, None)
+
+        if not pay_key:
+            return
+
+        if pay_key in ("bkash", "nagad"):
+            PAYMENT_INFO[pay_key] = text_in
+            db.set_setting(f"pay_{pay_key}", text_in)
+        elif pay_key in ("binance", "binance_pay_id"):
+            PAYMENT_INFO["binance_pay_id"] = text_in
+            db.set_setting("pay_binance_pay_id", text_in)
+        elif pay_key in ("usdt", "usdt_trc20"):
+            PAYMENT_INFO["usdt_trc20"] = text_in
+            db.set_setting("pay_usdt_trc20", text_in)
+        else:
+            PAYMENT_INFO[pay_key] = text_in
+            db.set_setting(f"pay_{pay_key}", text_in)
+
+        save_config()
+        db.log_activity(user_id, "PAYMENT_INFO_UPDATED", f"{pay_key}: {text_in}")
+
+        markup = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("💳 Payment Settings", callback_data="adm_action_edit_payments"),
+                InlineKeyboardButton("⚙️ Admin Dashboard", callback_data="admin_dashboard"),
+            ]
+        ])
+
+        await update.message.reply_text(
+            f"✅ <b>{pay_key.upper()} সফলভাবে আপডেট হয়েছে!</b>\n\n"
+            f"নতুন নম্বর / তথ্য: <code>{text_in}</code>\n"
+            f"💾 <i>ডাটাবেজ ও বটে পার্মানেন্টলি সেভ হয়ে গেছে!</i>",
+            parse_mode="HTML",
+            reply_markup=markup,
+        )
         return
 
 
@@ -1926,8 +1973,14 @@ async def cmd_setprice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     try:
-        bdt = int(args[1])
-        usdt = int(args[2]) if len(args) >= 3 else max(1, round(bdt / 100))
+        price_text = " ".join(args[1:])
+        nums = re.findall(r"\d+", price_text)
+        if not nums:
+            await update.message.reply_text("❌ Price must contain numeric values (e.g. 500 or 500 5).")
+            return
+
+        bdt = int(nums[0])
+        usdt = int(nums[1]) if len(nums) > 1 else max(1, round(bdt / 100))
 
         PLANS[plan_key]["price_bdt"] = bdt
         PLANS[plan_key]["price_usdt"] = usdt
@@ -1942,8 +1995,6 @@ async def cmd_setprice(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"💾 <i>Saved permanently in SQLite DB & Config.</i>",
             parse_mode="HTML",
         )
-    except ValueError:
-        await update.message.reply_text("❌ Price must be a numeric integer value (e.g. 500).")
     except Exception as e:
         await update.message.reply_text(f"❌ Error updating price: {e}")
 
@@ -2680,16 +2731,44 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
 
     if data == "adm_action_edit_payments":
         text = (
-            "💳 <b>CURRENT PAYMENT INFO:</b>\n\n"
+            "💳 <b>CURRENT PAYMENT CREDENTIALS:</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
             f"📱 <b>bKash:</b> <code>{PAYMENT_INFO.get('bkash', 'N/A')}</code>\n"
             f"📱 <b>Nagad:</b> <code>{PAYMENT_INFO.get('nagad', 'N/A')}</code>\n"
             f"🌐 <b>Binance Pay:</b> <code>{PAYMENT_INFO.get('binance_pay_id', 'N/A')}</code>\n"
-            f"🪙 <b>USDT TRC20:</b> <code>{PAYMENT_INFO.get('usdt_trc20', 'N/A')}</code>\n\n"
-            "To update any number directly, send:\n"
-            "<code>/setpayment &lt;bkash|nagad|binance|usdt&gt; &lt;new_number&gt;</code>"
+            f"🪙 <b>USDT TRC20:</b> <code>{PAYMENT_INFO.get('usdt_trc20', 'N/A')}</code>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "যেকোনো পেমেন্ট মেথড আপডেট করতে নিচের বাটনে ট্যাপ করুন অথবা কমান্ড পাঠান:\n"
+            "<code>/setpayment &lt;bkash|nagad|binance|usdt&gt; &lt;details&gt;</code>"
         )
-        markup = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Admin", callback_data="admin_dashboard")]])
+        markup = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("📱 Edit bKash", callback_data="adm_change_pay_bkash"),
+                InlineKeyboardButton("📱 Edit Nagad", callback_data="adm_change_pay_nagad"),
+            ],
+            [
+                InlineKeyboardButton("🌐 Edit Binance Pay", callback_data="adm_change_pay_binance"),
+                InlineKeyboardButton("🪙 Edit USDT TRC20", callback_data="adm_change_pay_usdt"),
+            ],
+            [
+                InlineKeyboardButton("🔙 Back to Admin", callback_data="admin_dashboard"),
+            ]
+        ])
         await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
+        return
+
+    if data.startswith("adm_change_pay_"):
+        pay_key = data.replace("adm_change_pay_", "")
+        USER_STATES[user_id] = {"action": "admin_awaiting_payment_input", "pay_key": pay_key}
+        label = {"bkash": "bKash Agent Number", "nagad": "Nagad Agent Number", "binance": "Binance Pay ID", "usdt": "USDT TRC20 Address"}.get(pay_key, pay_key)
+        curr = PAYMENT_INFO.get("binance_pay_id" if pay_key == "binance" else ("usdt_trc20" if pay_key == "usdt" else pay_key), "N/A")
+        await query.edit_message_text(
+            f"✏️ <b>Update {label}</b>\n\n"
+            f"বর্তমান ভ্যালু: <code>{curr}</code>\n\n"
+            f"নতুন নম্বর বা অ্যাড্রেসটি লিখে মেসেজ পাঠান:\n\n"
+            f"<i>(বাতিল করতে চাইলে /cancel লিখুন)</i>",
+            parse_mode="HTML",
+        )
         return
 
     if data == "adm_action_edit_prices":
