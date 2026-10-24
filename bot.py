@@ -54,6 +54,13 @@ from telegram.request import HTTPXRequest
 
 from database import db
 from scheduler import VaultScheduler
+from emojis import (
+    render_premium_html,
+    em_tag,
+    get_tg_emoji_tag,
+    strip_tg_emoji,
+    patch_bot_for_premium_emojis,
+)
 
 # Configure Logging
 logging.basicConfig(
@@ -596,18 +603,18 @@ async def send_payment_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     usdt_addr = PAYMENT_INFO.get("usdt_trc20", "TNPg8qkhm1xQsMNsgvH6p71tNwVXV7qaJe")
 
     text = (
-        f"💳 <b>অফিশিয়াল পেমেন্ট মেথডস ও গাইড</b>\n"
+        f"{em_tag('wallet', '💳')} <b>অফিশিয়াল পেমেন্ট মেথডস ও গাইড</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"🔹 <b>bKash (Agent - Cash Out Only):</b>\n"
+        f"{em_tag('bkash', '📱')} <b>bKash (Agent - Cash Out Only):</b>\n"
         f"👉 <code>{bkash_num}</code>\n\n"
-        f"🔹 <b>Nagad (Agent - Cash Out Only):</b>\n"
+        f"{em_tag('nagad', '📱')} <b>Nagad (Agent - Cash Out Only):</b>\n"
         f"👉 <code>{nagad_num}</code>\n\n"
         f"⚠️ <b>জরুরি সতর্কতা:</b>\n"
         f"✔️ <b>bkash, Nagad Cashout Only (Agent)</b>\n"
         f"👆 <b>শুধুমাত্র ক্যাশআউট করবেন</b> (Send Money গ্রহণযোগ্য নয়)।\n\n"
-        f"🔹 <b>Binance Pay ID:</b>\n"
+        f"{em_tag('binance', '🌐')} <b>Binance Pay ID:</b>\n"
         f"👉 <code>{binance_id}</code>\n\n"
-        f"🔹 <b>Usdt Trx (Trc20):</b>\n"
+        f"{em_tag('usdt', '💲')} <b>Usdt Trx (Trc20):</b>\n"
         f"👉 <code>{usdt_addr}</code>\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"➡️ <b>Send ScreenShot Must</b>\n"
@@ -656,19 +663,19 @@ async def handle_buy_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, pl
     usdt_addr = PAYMENT_INFO.get("usdt_trc20", "TNPg8qkhm1xQsMNsgvH6p71tNwVXV7qaJe")
 
     text = (
-        f"💳 <b>পেমেন্ট ইনস্ট্রাকশন: {plan['name']}</b>\n"
+        f"{em_tag('wallet', '💳')} <b>পেমেন্ট ইনস্ট্রাকশন: {plan['name']}</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"💰 <b>প্রদেয় মূল্য:</b> <b>{plan['price_bdt']} BDT</b> অথবা <b>${plan['price_usdt']} USDT</b>\n\n"
-        f"🔹 <b>bKash (Agent - Cash Out Only):</b>\n"
+        f"{em_tag('cash', '💰')} <b>প্রদেয় মূল্য:</b> <b>{plan['price_bdt']} BDT</b> অথবা <b>${plan['price_usdt']} USDT</b>\n\n"
+        f"{em_tag('bkash', '📱')} <b>bKash (Agent - Cash Out Only):</b>\n"
         f"👉 <code>{bkash_num}</code>\n\n"
-        f"🔹 <b>Nagad (Agent - Cash Out Only):</b>\n"
+        f"{em_tag('nagad', '📱')} <b>Nagad (Agent - Cash Out Only):</b>\n"
         f"👉 <code>{nagad_num}</code>\n\n"
         f"⚠️ <b>জরুরি সতর্কতা:</b>\n"
         f"✔️ <b>bkash, Nagad Cashout Only (Agent)</b>\n"
         f"👆 শুধুমাত্র ক্যাশআউট করবেন (Send Money গ্রহণযোগ্য নয়)।\n\n"
-        f"🔹 <b>Binance Pay ID:</b>\n"
+        f"{em_tag('binance', '🌐')} <b>Binance Pay ID:</b>\n"
         f"👉 <code>{binance_id}</code>\n\n"
-        f"🔹 <b>Usdt Trx (Trc20):</b>\n"
+        f"{em_tag('usdt', '💲')} <b>Usdt Trx (Trc20):</b>\n"
         f"👉 <code>{usdt_addr}</code>\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"➡️ <b>Send ScreenShot Must</b>\n"
@@ -2416,6 +2423,9 @@ def main():
     print(f"👑 Admins: {ADMIN_IDS}")
     print(f"📚 Connected Channels: {len(CHANNELS)}")
     print("=" * 60 + "\n")
+
+    # Universally activate Telegram Premium Custom Emoji Hook across all Bot messages
+    patch_bot_for_premium_emojis()
 
     # High-durability HTTPX request client with resilient timeouts
     request_client = HTTPXRequest(
