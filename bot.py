@@ -1198,6 +1198,8 @@ async def render_admin_dashboard(update: Update, context: ContextTypes.DEFAULT_T
     if not is_admin(user_id):
         return
 
+    stats = db.get_stats()
+
     em_crw = em_tag("crown", "👑")
     em_dia = em_tag("diamond", "💎")
     em_set = em_tag("settings", "⚙️")
@@ -1812,6 +1814,14 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     query = update.callback_query
     data = query.data
     user_id = query.from_user.id
+
+    # Fast acknowledge callback to instantly clear loading spinner in Telegram client
+    # (Skip for callbacks that display a modal alert or interactive toast)
+    if not (data == "check_force_sub" or data.startswith(("adm_app_", "adm_rej_", "adm_action_backup", "adm_quick_dur_"))):
+        try:
+            await query.answer()
+        except Exception:
+            pass
 
     # 0. Force Channel Join Check Action
     if data == "check_force_sub":
