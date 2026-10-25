@@ -290,7 +290,25 @@ def save_config():
 
 
 def is_admin(user_id: int) -> bool:
-    return user_id in ADMIN_IDS
+    try:
+        u_id = int(user_id)
+    except Exception:
+        return False
+    for a in ADMIN_IDS:
+        try:
+            if int(a) == u_id:
+                return True
+        except Exception:
+            pass
+    try:
+        extra = db.get_setting("extra_admin_ids", "")
+        if extra:
+            e_ids = [int(x.strip()) for x in extra.split(",") if x.strip().lstrip("-").isdigit()]
+            if u_id in e_ids:
+                return True
+    except Exception:
+        pass
+    return False
 
 
 def get_persistent_menu(is_admin_user: bool = False) -> ReplyKeyboardMarkup:
@@ -571,39 +589,10 @@ async def send_force_sub_message(update: Update, context: ContextTypes.DEFAULT_T
 # =============================================================================
 # USER COMMANDS & HANDLERS
 # =============================================================================
-async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Welcome dashboard with plan details, self-service checks, and admin link."""
+async def render_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Renders the aesthetic VIP Hub Dashboard with interactive buttons."""
     user = update.effective_user
     user_id = user.id
-
-    # Check for referral deep-link (?start=ref_<USER_ID>)
-    if context.args and len(context.args) > 0:
-        arg = context.args[0].strip()
-        if arg.startswith("ref_"):
-            try:
-                ref_id = int(arg.replace("ref_", ""))
-                if ref_id != user_id:
-                    recorded = db.record_lead(user_id=user_id, referrer_id=ref_id)
-                    if recorded:
-                        try:
-                            lead_user_name = html.escape(user.username or user.first_name or "VIP Member")
-                            lead_msg = (
-                                f"🔔 <b>New Referral Lead!</b>\n\n"
-                                f"👤 একজন নতুন ইউজার (@{lead_user_name}, ID: <code>{user_id}</code>) "
-                                f"আপনার রেফারেল লিংক ব্যবহার করে বটে প্রবেশ করেছেন।\n"
-                                f"🎯 ইউজার কোনো VIP প্ল্যান পারচেজ করলেই আপনার অ্যাকাউন্টে রিওয়ার্ড যুক্ত হবে!"
-                            )
-                            await context.bot.send_message(chat_id=ref_id, text=lead_msg, parse_mode="HTML")
-                        except Exception:
-                            pass
-            except Exception as e:
-                logger.error(f"Error handling ref deep link: {e}")
-
-    # Enforce mandatory channel join
-    is_subbed, unjoined_id, unjoined_link, unjoined_name = await check_force_sub(user_id, context)
-    if not is_subbed:
-        await send_force_sub_message(update, context, unjoined_link, unjoined_name)
-        return
 
     em_crw = em_tag("crown", "👑")
     em_dia = em_tag("diamond", "💎")
@@ -650,21 +639,80 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if is_admin(user_id):
         keyboard.append([InlineKeyboardButton("⚙️ Admin Control Panel", callback_data="admin_dashboard")])
 
-    # Pin persistent bottom navigation menu bar
-    try:
-        await update.message.reply_text(
-            f"🏛️ <b>{PRODUCT_NAME}</b>\n<i>Navigation menu loaded below.</i>",
-            parse_mode="HTML",
-            reply_markup=get_persistent_menu(is_admin(user_id)),
-        )
-    except Exception:
-        pass
+    markup = InlineKeyboardMarkup(keyboard)
 
-    await update.message.reply_text(
-        text=welcome_text,
-        parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-    )
+    if update.callback_query:
+        try:
+            await update.callback_query.edit_message_text(
+                text=welcome_text,
+                parse_mode="HTML",
+                reply_markup=markup,
+                disable_web_page_preview=True,
+            )
+        except Exception:
+            try:
+                await update.callback_query.message.reply_text(
+                    text=welcome_text,
+                    parse_mode="HTML",
+                    reply_markup=markup,
+                    disable_web_page_preview=True,
+                )
+            except Exception:
+                pass
+    elif update.message:
+        try:
+            await update.message.reply_text(
+                f"🏛️ <b>{PRODUCT_NAME}</b>\n<i>Navigation menu loaded below.</i>",
+                parse_mode="HTML",
+                reply_markup=get_persistent_menu(is_admin(user_id)),
+            )
+        except Exception:
+            pass
+
+        await update.message.reply_text(
+            text=welcome_text,
+            parse_mode="HTML",
+            reply_markup=markup,
+            disable_web_page_preview=True,
+        )
+
+
+async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Welcome dashboard with plan details, self-service checks, and admin link."""
+    user = update.effective_user
+    user_id = user.id
+    logger.info(f"🚀 /start command received from user {user_id} (@{user.username})")
+
+    # Check for referral deep-link (?start=ref_<USER_ID>)
+    if context.args and len(context.args) > 0:
+        arg = context.args[0].strip()
+        if arg.startswith("ref_"):
+            try:
+                ref_id = int(arg.replace("ref_", ""))
+                if ref_id != user_id:
+                    recorded = db.record_lead(user_id=user_id, referrer_id=ref_id)
+                    if recorded:
+                        try:
+                            lead_user_name = html.escape(user.username or user.first_name or "VIP Member")
+                            lead_msg = (
+                                f"🔔 <b>New Referral Lead!</b>\n\n"
+                                f"👤 একজন নতুন ইউজার (@{lead_user_name}, ID: <code>{user_id}</code>) "
+                                f"আপনার রেফারেল লিংক ব্যবহার করে বটে প্রবেশ করেছেন।\n"
+                                f"🎯 ইউজার কোনো VIP প্ল্যান পারচেজ করলেই আপনার অ্যাকাউন্টে রিওয়ার্ড যুক্ত হবে!"
+                            )
+                            await context.bot.send_message(chat_id=ref_id, text=lead_msg, parse_mode="HTML")
+                        except Exception:
+                            pass
+            except Exception as e:
+                logger.error(f"Error handling ref deep link: {e}")
+
+    # Enforce mandatory channel join
+    is_subbed, unjoined_id, unjoined_link, unjoined_name = await check_force_sub(user_id, context)
+    if not is_subbed:
+        await send_force_sub_message(update, context, unjoined_link, unjoined_name)
+        return
+
+    await render_main_menu(update, context)
 
 
 async def cmd_myplan(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -879,7 +927,10 @@ async def send_official_channel_info(update: Update, context: ContextTypes.DEFAU
 
 async def handle_buy_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan_key: str):
     query = update.callback_query
-    await query.answer()
+    try:
+        await query.answer()
+    except Exception:
+        pass
 
     plan = PLANS.get(plan_key)
     if not plan:
@@ -921,7 +972,10 @@ async def handle_buy_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, pl
 async def start_trx_submission(update: Update, context: ContextTypes.DEFAULT_TYPE, plan_key: str):
     query = update.callback_query
     user_id = query.from_user.id
-    await query.answer()
+    try:
+        await query.answer()
+    except Exception:
+        pass
 
     USER_STATES[user_id] = {
         "action": "awaiting_trx",
@@ -934,21 +988,25 @@ async def start_trx_submission(update: Update, context: ContextTypes.DEFAULT_TYP
         f"➡️ <b>Send ScreenShot Must</b>\n\n"
         f"<i>(বাতিল করতে চাইলে /cancel লিখুন)</i>"
     )
-    await query.edit_message_text(text, parse_mode="HTML")
+    try:
+        await query.edit_message_text(text, parse_mode="HTML")
+    except Exception:
+        await query.message.reply_text(text, parse_mode="HTML")
 
 
 async def handle_user_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles text submissions and payment screenshots (like TrxID or Admin inputs)."""
     user = update.effective_user
     user_id = user.id
+    msg_text = update.message.text.strip() if update.message.text else ""
+
+    logger.info(f"💬 MESSAGE [User: {user_id} (@{user.username})]: '{msg_text}'")
 
     if not is_admin(user_id):
         is_subbed, unjoined_id, unjoined_link, unjoined_name = await check_force_sub(user_id, context)
         if not is_subbed:
             await send_force_sub_message(update, context, unjoined_link, unjoined_name)
             return
-
-    msg_text = update.message.text.strip() if update.message.text else ""
 
     # Persistent Bottom Menu Bar Intercepts (Always Active)
     if msg_text in ("👑 VIP Plans & Pricing", "👑 VIP Plans", "VIP Plans & Pricing", "/plans"):
@@ -2377,109 +2435,73 @@ async def handle_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TY
 async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data = query.data
-    user_id = query.from_user.id
+    user = query.from_user
+    user_id = user.id
 
-    # Fast acknowledge callback to instantly clear loading spinner in Telegram client
-    # (Skip for callbacks that display a modal alert or interactive toast)
-    if not (data == "check_force_sub" or data.startswith(("adm_app_", "adm_rej_", "adm_action_backup", "adm_quick_dur_"))):
-        try:
-            await query.answer()
-        except Exception:
-            pass
+    logger.info(f"⚡ CALLBACK [User: {user_id} (@{user.username})]: '{data}'")
+
+    _answered = False
+    async def safe_ack(text: Optional[str] = None, show_alert: bool = False):
+        nonlocal _answered
+        if not _answered:
+            try:
+                if text:
+                    await query.answer(text=text, show_alert=show_alert)
+                else:
+                    await query.answer()
+                _answered = True
+            except Exception:
+                pass
 
     # 0. Force Channel Join Check Action
     if data == "check_force_sub":
         is_subbed, unjoined_id, unjoined_link, unjoined_name = await check_force_sub(user_id, context)
         if is_subbed:
-            await query.answer("✅ ধন্যবাদ! ভেরিফিকেশন সফল হয়েছে।", show_alert=True)
-            data = "main_menu"
+            await safe_ack("✅ ধন্যবাদ! ভেরিফিকেশন সফল হয়েছে।", show_alert=True)
+            await render_main_menu(update, context)
+            return
         else:
-            await query.answer("❌ আপনি এখনো চ্যানেলে জয়েন করেননি! দয়া করে চ্যানেলে জয়েন করে আবার ভেরিফাই করুন।", show_alert=True)
+            await safe_ack("❌ আপনি এখনো চ্যানেলে জয়েন করেননি! দয়া করে চ্যানেলে জয়েন করে আবার ভেরিফাই করুন।", show_alert=True)
             return
 
     # Verify force sub for any other callbacks from non-admin users
     if not is_admin(user_id):
         is_subbed, unjoined_id, unjoined_link, unjoined_name = await check_force_sub(user_id, context)
         if not is_subbed:
-            await query.answer("⚠️ অনুগ্রহ করে আগে আমাদের চ্যানেলে জয়েন করুন!", show_alert=True)
+            await safe_ack("⚠️ অনুগ্রহ করে আগে আমাদের চ্যানেলে জয়েন করুন!", show_alert=True)
             await send_force_sub_message(update, context, unjoined_link, unjoined_name)
             return
 
-    # 1. Main Navigation
+    # 1. Main User Navigation Callbacks (Public)
     if data == "main_menu":
-        await query.answer()
-        user = query.from_user
-        uid = user.id
-
-        em_crw = em_tag("crown", "👑")
-        em_dia = em_tag("diamond", "💎")
-        em_usr = em_tag("profile", "👤")
-        em_shd = em_tag("verify", "🛡️")
-        em_crs = em_tag("courses", "🎓")
-        em_chn = em_tag("broadcast", "📢")
-        em_grp = em_tag("referral", "👥")
-        em_wal = em_tag("wallet", "💳")
-        em_zap = em_tag("zap", "⚡")
-        em_chk = em_tag("check", "🟢")
-        em_sup = em_tag("support", "💬")
-
-        sub = db.get_subscriber(uid)
-        is_vip = sub and sub.get("status") == "active"
-        tier_label = f"👑 VIP ({sub['plan_name']})" if is_vip else "⭐ Free Guest"
-        status_text = "Active & Verified" if is_vip else "24/7 Instant Auto-Delivery"
-        box_border = "━━━━━━━━━━━━━━━━━━━━"
-
-        welcome_text = (
-            f"{em_crw} <b>{PRODUCT_NAME} — VIP HUB</b> {em_dia}\n"
-            f"<i>স্বাগতম, {html.escape(user.first_name or 'VIP Member')}! এক্সক্লুসিভ কোর্স ভল্ট ও প্রিমিয়াম হাব।</i>\n\n"
-            f"{box_border}\n"
-            f"{em_usr} <b>Customer ID:</b> <code>#{uid}</code>\n"
-            f"{em_shd} <b>Account Tier:</b> <code>{tier_label}</code>\n"
-            f"{em_chk} <b>Service Status:</b> <code>{status_text}</code>\n"
-            f"{em_zap} <b>Delivery:</b> <code>Anti-Leak 1-Time Invite Links</code>\n"
-            f"{box_border}\n\n"
-            f"🏛️ <b>VIP Vault Services:</b>\n"
-            f"• {em_crs} <b>Courses:</b> লাইফটাইম ক্লাউড ড্রাইভ ও সিক্রেট মেথডস\n"
-            f"• {em_chn} <b>VIP Channels:</b> প্রতিদিন নতুন কোর্স রিলিজ ও রিসোর্স\n"
-            f"• {em_grp} <b>VIP Groups:</b> সিক্রেট ডিসকাশন ও স্টুডেন্ট নেটওয়ার্ক\n"
-            f"• {em_sup} <b>Live Support:</b> ২৪/৭ ডিরেক্ট অ্যাডমিন অ্যাসিস্ট্যান্স\n\n"
-            f"👉 <i>নিচের বাটনগুলো ব্যবহার করে প্ল্যান ব্রাউজ বা অ্যাকাউন্ট পরিচালনা করুন:</i>"
-        )
-
-        keyboard = [
-            [InlineKeyboardButton("👑 VIP Plans & Pricing", callback_data="plans_menu")],
-            [InlineKeyboardButton("👤 My Subscription Status", callback_data="user_status")],
-            [InlineKeyboardButton("💳 Payment Methods & Info", callback_data="payment_info")],
-            [InlineKeyboardButton("🤝 Affiliate & Reseller Hub", callback_data="affiliate_menu")],
-        ]
-        if is_admin(uid):
-            keyboard.append([InlineKeyboardButton("⚙️ Admin Control Panel", callback_data="admin_dashboard")])
-
-        await query.edit_message_text(welcome_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+        await safe_ack()
+        await render_main_menu(update, context)
         return
 
     if data == "plans_menu":
+        await safe_ack()
         await render_plans_menu(update, context)
         return
 
     if data == "user_status":
-        await query.answer()
+        await safe_ack()
         await cmd_myplan(update, context)
         return
 
     if data == "user_renew":
+        await safe_ack()
         await render_plans_menu(update, context)
         return
 
     if data == "payment_info":
-        await query.answer()
+        await safe_ack()
         await send_payment_info(update, context)
         return
 
     if data == "get_my_links":
         sub = db.get_subscriber(user_id)
         if sub and sub.get("status") == "active":
-            await query.answer("Fetching your secure 1-time invite links...")
+            await safe_ack("Fetching your secure 1-time invite links...")
             await deliver_welcome_access(
                 context.bot,
                 user_id,
@@ -2488,22 +2510,66 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 sub["is_lifetime"]
             )
         else:
-            await query.answer("❌ আপনার কোনো সক্রিয় VIP মেম্বারশিপ নেই!", show_alert=True)
+            await safe_ack("❌ আপনার কোনো সক্রিয় VIP মেম্বারশিপ নেই!", show_alert=True)
         return
 
     # Plan Selection Callbacks
     if data.startswith("buy_"):
+        await safe_ack()
         plan_key = data.replace("buy_", "")
         await handle_buy_plan(update, context, plan_key)
         return
 
     if data.startswith("submit_trx_"):
+        await safe_ack()
         plan_key = data.replace("submit_trx_", "")
         await start_trx_submission(update, context, plan_key)
         return
 
-    # 2. Admin Callbacks
+    # -------------------------------------------------------------------------
+    # Affiliate & Reseller User Callbacks (Accessible to ALL Users)
+    # -------------------------------------------------------------------------
+    if data == "affiliate_menu":
+        await safe_ack()
+        await render_affiliate_hub(update, context)
+        return
+
+    if data == "aff_rules_guide":
+        await safe_ack()
+        await render_affiliate_rules_guide(query)
+        return
+
+    if data == "aff_wholesale_locked":
+        await safe_ack("🔒 এই ফিচারটি শুধুমাত্র Verified Reseller দের জন্য! ২টি সফল পেইড সেল সম্পন্ন করলে স্বয়ংক্রিয়ভাবে আনলক হবে।", show_alert=True)
+        return
+
+    if data == "aff_wholesale_plans":
+        await safe_ack()
+        await render_wholesale_plans(query, user_id)
+        return
+
+    if data.startswith("ws_buy_"):
+        await safe_ack()
+        plan_key = data.replace("ws_buy_", "")
+        await handle_buy_wholesale(update, context, plan_key)
+        return
+
+    if data == "aff_payout_req":
+        await safe_ack()
+        await handle_payout_request_init(update, context)
+        return
+
+    if data.startswith("aff_pay_m_"):
+        await safe_ack()
+        meth = data.replace("aff_pay_m_", "")
+        await handle_payout_method_selected(update, context, meth)
+        return
+
+    # -------------------------------------------------------------------------
+    # 2. Admin Callbacks (Only accessible to Admins)
+    # -------------------------------------------------------------------------
     if not is_admin(user_id):
+        await safe_ack()
         return
 
     if data == "admin_dashboard":
@@ -2512,11 +2578,11 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
 
     # Admin Payment Approval / Rejection
     if data.startswith("adm_app_"):
-        await query.answer("Processing approval...")
+        await safe_ack("Processing approval...")
         req_id = int(data.replace("adm_app_", ""))
         req = db.get_payment_request(req_id)
         if not req or req["status"] != "pending":
-            await query.answer("This request has already been processed!", show_alert=True)
+            await safe_ack("This request has already been processed!", show_alert=True)
             return
 
         plan_key = req["plan_key"]
@@ -2671,11 +2737,11 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     if data.startswith("adm_rej_"):
-        await query.answer("Processing rejection...")
+        await safe_ack("Processing rejection...")
         req_id = int(data.replace("adm_rej_", ""))
         req = db.get_payment_request(req_id)
         if not req or req["status"] != "pending":
-            await query.answer("This request has already been processed!", show_alert=True)
+            await safe_ack("This request has already been processed!", show_alert=True)
             return
 
         db.update_payment_status(req_id, "rejected")
@@ -2721,7 +2787,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         dur_type = data.replace("adm_quick_dur_", "")
         state = USER_STATES.get(user_id)
         if not state or "target_user_id" not in state:
-            await query.answer("Session expired. Please start again.", show_alert=True)
+            await safe_ack("Session expired. Please start again.", show_alert=True)
             return
 
         target_id = state["target_user_id"]
@@ -2760,7 +2826,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     if data == "adm_action_backup":
-        await query.answer("Creating backup...")
+        await safe_ack("Creating backup...")
         backup_file = db.backup_database()
         with open(backup_file, "rb") as f:
             await context.bot.send_document(
@@ -2770,11 +2836,11 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 caption=f"🛡️ <b>Manual Database Backup</b>\n📅 <code>{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>",
                 parse_mode="HTML",
             )
-        await query.answer("Backup sent to your Telegram!", show_alert=True)
+        await safe_ack("Backup sent to your Telegram!", show_alert=True)
         return
 
     if data == "adm_action_list_active":
-        await query.answer()
+        await safe_ack()
         active_subs = db.get_active_subscribers()
         if not active_subs:
             await query.edit_message_text("ℹ️ No active subscribers found.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back", callback_data="admin_dashboard")]]))
@@ -2795,7 +2861,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     if data == "adm_action_channels":
-        await query.answer()
+        await safe_ack()
         channels_list = [c for c in CHANNELS if c.get("type", "channel") == "channel"]
         groups_list = [c for c in CHANNELS if c.get("type") == "group"]
 
@@ -2853,7 +2919,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         dur_type = data.replace("adm_quick_renew_", "")
         state = USER_STATES.get(user_id)
         if not state or "target_user_id" not in state:
-            await query.answer("Session expired. Please start again.", show_alert=True)
+            await safe_ack("Session expired. Please start again.", show_alert=True)
             return
 
         target_id = state["target_user_id"]
@@ -2916,7 +2982,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     if data == "adm_action_expiring":
-        await query.answer()
+        await safe_ack()
         expiring_users = db.get_expiring_soon_subscribers(hours=24)
         if not expiring_users:
             await query.edit_message_text(
@@ -3003,13 +3069,13 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         VIP_PREVIEW_LINK = ""
         VIP_PREVIEW_NAME = ""
         save_config()
-        await query.answer("Preview link removed!", show_alert=True)
+        await safe_ack("Preview link removed!", show_alert=True)
         await render_admin_dashboard(update, context)
         return
 
     if data == "adm_action_del_channel":
         if not CHANNELS:
-            await query.answer("No channels or groups configured to delete!", show_alert=True)
+            await safe_ack("No channels or groups configured to delete!", show_alert=True)
             return
         buttons = []
         for ch in CHANNELS:
@@ -3024,17 +3090,17 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         db.delete_channel(ch_id)
         CHANNELS[:] = [ch for ch in CHANNELS if ch["id"] != ch_id]
         save_config()
-        await query.answer("Destination removed!", show_alert=True)
+        await safe_ack("Destination removed!", show_alert=True)
         await render_admin_dashboard(update, context)
         return
 
     if data == "adm_action_clear_logs":
         live_log_buffer.clear()
-        await query.answer("🧹 Live logs & error buffer cleared!", show_alert=True)
+        await safe_ack("🧹 Live logs & error buffer cleared!", show_alert=True)
         data = "adm_action_logs"
 
     if data == "adm_action_logs":
-        await query.answer()
+        await safe_ack()
 
         # 1. API Latency Test
         t0 = time.perf_counter()
@@ -3224,56 +3290,23 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     # -------------------------------------------------------------------------
-    # Affiliate & Reseller Callbacks
+    # Admin Affiliate Management Callbacks
     # -------------------------------------------------------------------------
-    if data == "affiliate_menu":
-        await query.answer()
-        await render_affiliate_hub(update, context)
-        return
-
-    if data == "aff_rules_guide":
-        await query.answer()
-        await render_affiliate_rules_guide(query)
-        return
-
-    if data == "aff_wholesale_locked":
-        await query.answer("🔒 এই ফিচারটি শুধুমাত্র Verified Reseller দের জন্য! ২টি সফল পেইড সেল সম্পন্ন করলে স্বয়ংক্রিয়ভাবে আনলক হবে।", show_alert=True)
-        return
-
-    if data == "aff_wholesale_plans":
-        await query.answer()
-        await render_wholesale_plans(query, user_id)
-        return
-
-    if data.startswith("ws_buy_"):
-        plan_key = data.replace("ws_buy_", "")
-        await handle_buy_wholesale(update, context, plan_key)
-        return
-
-    if data == "aff_payout_req":
-        await handle_payout_request_init(update, context)
-        return
-
-    if data.startswith("aff_pay_m_"):
-        meth = data.replace("aff_pay_m_", "")
-        await handle_payout_method_selected(update, context, meth)
-        return
-
     if data == "adm_aff_center":
         if is_admin(user_id):
-            await query.answer()
+            await safe_ack()
             await render_admin_affiliate_center(query)
         return
 
     if data == "adm_aff_payouts":
         if is_admin(user_id):
-            await query.answer()
+            await safe_ack()
             await render_admin_pending_payouts(query)
         return
 
     if data == "adm_aff_settings":
         if is_admin(user_id):
-            await query.answer()
+            await safe_ack()
             await render_admin_affiliate_settings(query)
         return
 
@@ -3282,12 +3315,13 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             curr = db.get_setting("affiliate_enabled", "1")
             new_val = "0" if curr == "1" else "1"
             db.set_setting("affiliate_enabled", new_val)
-            await query.answer(f"System: {'ON 🟢' if new_val == '1' else 'OFF 🔴'}")
+            await safe_ack(f"System: {'ON 🟢' if new_val == '1' else 'OFF 🔴'}")
             await render_admin_affiliate_settings(query)
         return
 
     if data.startswith("adm_cfg_"):
         if is_admin(user_id):
+            await safe_ack()
             sub_key = data.replace("adm_cfg_", "")
             cfg_meta = {
                 "comm": ("affiliate_cash_comm_pct", "কমিশন শতকরা হার (%)", "উদাহরণ: 50"),
@@ -3315,7 +3349,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
 
     if data.startswith("aff_p_app_"):
         if is_admin(user_id):
-            await query.answer("Approving payout...")
+            await safe_ack("Approving payout...")
             payout_id = int(data.replace("aff_p_app_", ""))
             ok, msg, p_data = db.approve_payout(payout_id)
             if ok and p_data:
@@ -3346,12 +3380,12 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 except Exception:
                     pass
             else:
-                await query.answer(f"❌ {msg}", show_alert=True)
+                await safe_ack(f"❌ {msg}", show_alert=True)
         return
 
     if data.startswith("aff_p_rej_"):
         if is_admin(user_id):
-            await query.answer("Rejecting payout...")
+            await safe_ack("Rejecting payout...")
             payout_id = int(data.replace("aff_p_rej_", ""))
             ok, msg, p_data = db.reject_payout(payout_id, "Rejected by admin")
             if ok and p_data:
@@ -3380,8 +3414,11 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                 except Exception:
                     pass
             else:
-                await query.answer(f"❌ {msg}", show_alert=True)
+                await safe_ack(f"❌ {msg}", show_alert=True)
         return
+
+    # Fallback acknowledge if no handler answered
+    await safe_ack()
 
 
 # =============================================================================
@@ -3503,7 +3540,10 @@ async def render_wholesale_plans(query: Any, user_id: int):
     aff = db.get_or_create_affiliate(user_id)
     min_unlock = int(db.get_setting("affiliate_min_sales_unlock", "2"))
     if aff.get("role") != "reseller" and aff.get("total_sales", 0) < min_unlock and not is_admin(user_id):
-        await query.answer("🔒 এই ফিচারটি শুধুমাত্র Verified Reseller দের জন্য!", show_alert=True)
+        try:
+            await query.answer("🔒 এই ফিচারটি শুধুমাত্র Verified Reseller দের জন্য!", show_alert=True)
+        except Exception:
+            pass
         return
 
     ws_discount = float(db.get_setting("affiliate_wholesale_discount_pct", "50"))
@@ -3530,7 +3570,10 @@ async def handle_buy_wholesale(update: Update, context: ContextTypes.DEFAULT_TYP
     """Starts checkout for a wholesale plan at 50% discount for client dispatch."""
     query = update.callback_query
     user_id = query.from_user.id
-    await query.answer()
+    try:
+        await query.answer()
+    except Exception:
+        pass
 
     if plan_key not in PLANS:
         await query.edit_message_text("❌ প্ল্যান পাওয়া যায়নি।")
@@ -3579,15 +3622,24 @@ async def handle_payout_request_init(update: Update, context: ContextTypes.DEFAU
     min_unlock = int(db.get_setting("affiliate_min_sales_unlock", "2"))
     if aff.get("role") != "reseller" and aff.get("total_sales", 0) < min_unlock and not is_admin(user_id):
         rem = max(1, min_unlock - aff.get("total_sales", 0))
-        await query.answer(f"🔒 উইথড্র লকড! আনলক করতে আরও {rem}টি পেইড সেল সম্পন্ন করতে হবে।", show_alert=True)
+        try:
+            await query.answer(f"🔒 উইথড্র লকড! আনলক করতে আরও {rem}টি পেইড সেল সম্পন্ন করতে হবে।", show_alert=True)
+        except Exception:
+            pass
         return
 
     min_payout = float(db.get_setting("affiliate_min_payout_bdt", "500"))
     if aff["unpaid_balance_bdt"] < min_payout:
-        await query.answer(f"⚠️ অপর্যাপ্ত ব্যালেন্স! মিনিমাম পে-আউট {int(min_payout)} BDT। (বর্তমান: {aff['unpaid_balance_bdt']:.2f} BDT)", show_alert=True)
+        try:
+            await query.answer(f"⚠️ অপর্যাপ্ত ব্যালেন্স! মিনিমাম পে-আউট {int(min_payout)} BDT। (বর্তমান: {aff['unpaid_balance_bdt']:.2f} BDT)", show_alert=True)
+        except Exception:
+            pass
         return
 
-    await query.answer()
+    try:
+        await query.answer()
+    except Exception:
+        pass
     text = (
         f"💸 <b>REQUEST PAYOUT — কমিশন উইথড্রয়াল</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
@@ -3612,7 +3664,10 @@ async def handle_payout_request_init(update: Update, context: ContextTypes.DEFAU
 async def handle_payout_method_selected(update: Update, context: ContextTypes.DEFAULT_TYPE, method: str):
     query = update.callback_query
     user_id = query.from_user.id
-    await query.answer()
+    try:
+        await query.answer()
+    except Exception:
+        pass
 
     method_label = {
         "bkash": "bKash (Personal / Agent)",
