@@ -1221,32 +1221,33 @@ async def handle_user_text_message(update: Update, context: ContextTypes.DEFAULT
             await send_force_sub_message(update, context, unjoined_link, unjoined_name)
             return
 
-    # Persistent Bottom Menu Bar Intercepts (Always Active)
-    if msg_text in ("👑 VIP Plans & Pricing", "👑 VIP Plans", "VIP Plans & Pricing", "/plans"):
+    # Persistent Bottom Menu Bar Intercepts (Always Active with or without emojis)
+    clean_msg = strip_all_emojis(msg_text).strip()
+    if clean_msg in ("VIP Plans & Pricing", "VIP Plans") or msg_text in ("👑 VIP Plans & Pricing", "👑 VIP Plans", "/plans"):
         USER_STATES.pop(user_id, None)
         await render_plans_menu(update, context)
         return
-    if msg_text in ("💳 Payment Methods", "💳 Payment Info", "Payment Methods & Info", "/payment"):
+    if clean_msg in ("Payment Methods", "Payment Info", "Payment Methods & Info") or msg_text in ("💳 Payment Methods", "💳 Payment Info", "/payment"):
         USER_STATES.pop(user_id, None)
         await send_payment_info(update, context)
         return
-    if msg_text in ("👤 My Subscription", "👤 My Plan", "My Subscription Status", "/myplan"):
+    if clean_msg in ("My Subscription", "My Plan", "My Subscription Status") or msg_text in ("👤 My Subscription", "👤 My Plan", "/myplan"):
         USER_STATES.pop(user_id, None)
         await cmd_myplan(update, context)
         return
-    if msg_text in ("🔗 Access VIP Channels", "🔗 Access VIP Channels & Groups", "Access VIP Channels", "/links"):
+    if clean_msg in ("Access VIP Channels", "Access VIP Channels & Groups") or msg_text in ("🔗 Access VIP Channels", "🔗 Access VIP Channels & Groups", "/links"):
         USER_STATES.pop(user_id, None)
         await cmd_links(update, context)
         return
-    if msg_text in ("📢 Official Channel", "📢 Channel", "Official Channel"):
+    if clean_msg in ("Official Channel", "Channel") or msg_text in ("📢 Official Channel", "📢 Channel"):
         USER_STATES.pop(user_id, None)
         await send_official_channel_info(update, context)
         return
-    if msg_text in ("🤝 Affiliate Hub", "🤝 Affiliate & Reseller Hub", "Affiliate Hub", "/affiliate", "/ref"):
+    if clean_msg in ("Affiliate Hub", "Affiliate & Reseller Hub", "Affiliate") or msg_text in ("🤝 Affiliate Hub", "🤝 Affiliate & Reseller Hub", "/affiliate", "/ref"):
         USER_STATES.pop(user_id, None)
         await render_affiliate_hub(update, context)
         return
-    if msg_text in ("⚙️ Admin Control Panel", "⚙️ Admin Panel", "/admin"):
+    if clean_msg in ("Admin Control Panel", "Admin Panel") or msg_text in ("⚙️ Admin Control Panel", "⚙️ Admin Panel", "/admin"):
         USER_STATES.pop(user_id, None)
         if is_admin(user_id):
             await render_admin_dashboard(update, context)

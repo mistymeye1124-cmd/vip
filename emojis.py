@@ -425,11 +425,211 @@ def render_premium_html(text: str) -> str:
     return "".join(result)
 
 
+def detect_emoji_key_from_text(text: str) -> Optional[str]:
+    """
+    Automatically detects the best custom emoji key by inspecting unicode emojis
+    or intent keywords inside button or message text.
+    """
+    if not text:
+        return None
+
+    # 1. Inspect direct unicode emojis
+    sorted_emojis = sorted(EMOJI_CHAR_TO_KEY.keys(), key=len, reverse=True)
+    for em in sorted_emojis:
+        if em in text:
+            return EMOJI_CHAR_TO_KEY[em]
+
+    # 2. Inspect intent keywords (English + Bengali)
+    t_lower = text.lower()
+    keyword_map = [
+        (("back", "main menu", "হোম", "মেনু", "ফিরে", "পিছনে"), "back"),
+        (("cancel", "close", "বাতিল", "বন্ধ"), "cross"),
+        (("approve", "confirm", "accept", "অনুমোদন", "নিশ্চিত", "সফল", "active"), "check"),
+        (("deposit", "পেমেন্ট মেথড", "পেমেন্ট তথ্য", "pay info", "payment info", "payment methods", "edit payments", "পেমেন্ট"), "deposit"),
+        (("buy", "order", "কিনুন", "অর্ডার", "ক্রয়"), "cart"),
+        (("plan", "plans", "pricing", "প্রাইসিং", "প্ল্যান", "ফি"), "crown"),
+        (("rule", "rules", "শর্ত", "নিয়ম", "preview", "প্রিভিউ", "proof", "প্রুফ"), "courses"),
+        (("course", "courses", "কোর্স", "কোর্সের"), "courses"),
+        (("drive", "mega", "cloud", "vault", "ভল্ট", "ডেলিভারি", "এক্সেস", "links"), "download"),
+        (("subscription", "my status", "profile", "account", "আমার অ্যাকাউন্ট", "সাবস্ক্রিপশন"), "profile"),
+        (("affiliate", "reseller", "রেফারেল", "রিসেলার", "কমিশন", "aff"), "reseller"),
+        (("support", "help", "contact", "সাপোর্ট", "সাহায্য", "অ্যাসিস্ট্যান্স"), "support"),
+        (("admin", "অ্যাডমিন", "এডমিন", "owner", "control panel"), "admin"),
+        (("settings", "সেটিংস", "কনফিগ", "tools"), "settings"),
+        (("broadcast", "ব্রডকাস্ট", "মেসেজ পাঠান"), "broadcast"),
+        (("channel", "group", "চ্যানেল", "গ্রুপ"), "channel"),
+        (("renew", "রিনিউ", "extend"), "refresh"),
+        (("monthly", "month", "মাসিক"), "box"),
+        (("yearly", "year", "বাৎসরিক"), "fire"),
+        (("lifetime", "আজীবন", "লাইফটাইম"), "crown"),
+        (("kick", "remove", "রিমুভ", "ডিলিট", "del"), "cross"),
+        (("search", "সার্চ", "খুঁজুন"), "search"),
+        (("users", "list", "তালিকা"), "referral"),
+        (("bkash", "বিকাশ"), "bkash"),
+        (("nagad", "নগদ"), "nagad"),
+        (("rocket", "রকেট"), "rocket"),
+        (("binance", "বাইন্যান্স", "usdt"), "binance"),
+    ]
+    for keywords, key in keyword_map:
+        if any(kw in t_lower for kw in keywords):
+            return key
+
+    return None
+
+
+def apply_premium_emojis_to_keyboard(reply_markup):
+    """
+    Globally enriches all buttons on any InlineKeyboardMarkup or ReplyKeyboardMarkup
+    with native animated Telegram Premium custom emoji icons (icon_custom_emoji_id via api_kwargs)
+    and cleans static unicode emojis from button labels.
+    """
+    if not reply_markup:
+        return reply_markup
+    try:
+        from telegram import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
+
+        if isinstance(reply_markup, InlineKeyboardMarkup):
+            new_rows = []
+            for row in reply_markup.inline_keyboard:
+                new_row = []
+                for btn in row:
+                    text = btn.text or ""
+                    existing_eid = None
+                    if hasattr(btn, "api_kwargs") and btn.api_kwargs:
+                        existing_eid = btn.api_kwargs.get("icon_custom_emoji_id")
+
+                    if not existing_eid:
+                        k = detect_emoji_key_from_text(text)
+                        eid = get_custom_emoji_id(k) if k else None
+                    else:
+                        eid = existing_eid
+
+                    clean_text = strip_all_emojis(text) if eid else text
+                    api_kw = dict(btn.api_kwargs) if hasattr(btn, "api_kwargs") and btn.api_kwargs else {}
+                    if eid:
+                        api_kw["icon_custom_emoji_id"] = str(eid)
+
+                    new_btn = InlineKeyboardButton(
+                        text=clean_text if clean_text else text,
+                        callback_data=btn.callback_data,
+                        url=btn.url,
+                        web_app=btn.web_app,
+                        copy_text=getattr(btn, "copy_text", None),
+                        switch_inline_query=getattr(btn, "switch_inline_query", None),
+                        switch_inline_query_current_chat=getattr(btn, "switch_inline_query_current_chat", None),
+                        api_kwargs=api_kw if api_kw else None,
+                    )
+                    new_row.append(new_btn)
+                new_rows.append(new_row)
+            return InlineKeyboardMarkup(new_rows)
+
+        elif isinstance(reply_markup, ReplyKeyboardMarkup):
+            new_rows = []
+            for row in reply_markup.keyboard:
+                new_row = []
+                for btn in row:
+                    text = btn.text if hasattr(btn, "text") else str(btn)
+                    existing_eid = None
+                    if hasattr(btn, "api_kwargs") and btn.api_kwargs:
+                        existing_eid = btn.api_kwargs.get("icon_custom_emoji_id")
+
+                    if not existing_eid:
+                        k = detect_emoji_key_from_text(text)
+                        eid = get_custom_emoji_id(k) if k else None
+                    else:
+                        eid = existing_eid
+
+                    clean_text = strip_all_emojis(text) if eid else text
+                    api_kw = dict(btn.api_kwargs) if hasattr(btn, "api_kwargs") and btn.api_kwargs else {}
+                    if eid:
+                        api_kw["icon_custom_emoji_id"] = str(eid)
+
+                    new_btn = KeyboardButton(
+                        text=clean_text if clean_text else text,
+                        request_contact=getattr(btn, "request_contact", None),
+                        request_location=getattr(btn, "request_location", None),
+                        api_kwargs=api_kw if api_kw else None,
+                    )
+                    new_row.append(new_btn)
+                new_rows.append(new_row)
+            return ReplyKeyboardMarkup(
+                keyboard=new_rows,
+                resize_keyboard=reply_markup.resize_keyboard,
+                one_time_keyboard=reply_markup.one_time_keyboard,
+                selective=reply_markup.selective,
+                input_field_placeholder=reply_markup.input_field_placeholder,
+                is_persistent=getattr(reply_markup, "is_persistent", None),
+            )
+    except Exception as e:
+        logger.warning(f"Failed to apply premium emojis to keyboard: {e}")
+        return reply_markup
+    return reply_markup
+
+
+def strip_button_custom_emojis(reply_markup):
+    """
+    Strips icon_custom_emoji_id from all buttons in reply_markup as an automatic fallback
+    if Telegram Bot API rejects custom emoji in buttons.
+    """
+    if not reply_markup:
+        return reply_markup
+    try:
+        from telegram import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
+
+        if isinstance(reply_markup, InlineKeyboardMarkup):
+            new_rows = []
+            for row in reply_markup.inline_keyboard:
+                new_row = []
+                for btn in row:
+                    api_kw = dict(btn.api_kwargs) if hasattr(btn, "api_kwargs") and btn.api_kwargs else {}
+                    api_kw.pop("icon_custom_emoji_id", None)
+                    new_btn = InlineKeyboardButton(
+                        text=btn.text,
+                        callback_data=btn.callback_data,
+                        url=btn.url,
+                        web_app=btn.web_app,
+                        copy_text=getattr(btn, "copy_text", None),
+                        switch_inline_query=getattr(btn, "switch_inline_query", None),
+                        switch_inline_query_current_chat=getattr(btn, "switch_inline_query_current_chat", None),
+                        api_kwargs=api_kw if api_kw else None,
+                    )
+                    new_row.append(new_btn)
+                new_rows.append(new_row)
+            return InlineKeyboardMarkup(new_rows)
+        elif isinstance(reply_markup, ReplyKeyboardMarkup):
+            new_rows = []
+            for row in reply_markup.keyboard:
+                new_row = []
+                for btn in row:
+                    api_kw = dict(btn.api_kwargs) if hasattr(btn, "api_kwargs") and btn.api_kwargs else {}
+                    api_kw.pop("icon_custom_emoji_id", None)
+                    new_btn = KeyboardButton(
+                        text=btn.text if hasattr(btn, "text") else str(btn),
+                        request_contact=getattr(btn, "request_contact", None),
+                        request_location=getattr(btn, "request_location", None),
+                        api_kwargs=api_kw if api_kw else None,
+                    )
+                    new_row.append(new_btn)
+                new_rows.append(new_row)
+            return ReplyKeyboardMarkup(
+                keyboard=new_rows,
+                resize_keyboard=reply_markup.resize_keyboard,
+                one_time_keyboard=reply_markup.one_time_keyboard,
+                selective=reply_markup.selective,
+                input_field_placeholder=reply_markup.input_field_placeholder,
+                is_persistent=getattr(reply_markup, "is_persistent", None),
+            )
+    except Exception:
+        return reply_markup
+    return reply_markup
+
+
 def patch_bot_for_premium_emojis():
     """
-    Universally patches python-telegram-bot's telegram.Bot class to ensure
-    100% of outgoing HTML messages automatically render Telegram Premium custom emojis.
-    Handles both positional and keyword arguments, with automated fallback for parse errors.
+    Universally patches python-telegram-bot's telegram.Bot class to ensure:
+    1. 100% of outgoing HTML messages automatically render Telegram Premium custom emojis (<tg-emoji>).
+    2. 100% of inline buttons and reply keyboards automatically render native Telegram Premium custom emoji icons (icon_custom_emoji_id).
+    3. Crash-immune automated fallbacks if Telegram rejects entities or custom emojis.
     Recursion-safe: only patches Bot (ExtBot automatically delegates to super().send_message).
     """
     try:
@@ -443,6 +643,7 @@ def patch_bot_for_premium_emojis():
         _orig_edit_message_text = Bot.edit_message_text
         _orig_send_photo = Bot.send_photo
         _orig_edit_message_caption = Bot.edit_message_caption
+        _orig_edit_message_reply_markup = Bot.edit_message_reply_markup
 
         async def safe_send_message(self, *args, **kwargs):
             pm = kwargs.get("parse_mode")
@@ -453,19 +654,25 @@ def patch_bot_for_premium_emojis():
                     new_args = list(args)
                     new_args[1] = render_premium_html(new_args[1])
                     args = tuple(new_args)
+
+            if "reply_markup" in kwargs and kwargs["reply_markup"] is not None:
+                kwargs["reply_markup"] = apply_premium_emojis_to_keyboard(kwargs["reply_markup"])
+
             try:
                 return await _orig_send_message(self, *args, **kwargs)
             except BadRequest as e:
                 err_msg = str(e).lower()
                 if "message is not modified" in err_msg:
                     return True
-                if any(term in err_msg for term in ("can't parse entities", "entity_text_invalid", "custom_emoji_id_invalid", "entity_bounds_invalid", "tag_empty", "failed to parse")):
+                if any(term in err_msg for term in ("can't parse entities", "entity_text_invalid", "custom_emoji_id_invalid", "entity_bounds_invalid", "tag_empty", "failed to parse", "button_icon_custom_emoji_invalid", "bot_premium_required")):
                     if "text" in kwargs and kwargs["text"]:
                         kwargs["text"] = strip_tg_emoji(kwargs["text"])
                     elif len(args) >= 2 and isinstance(args[1], str):
                         new_args = list(args)
                         new_args[1] = strip_tg_emoji(new_args[1])
                         args = tuple(new_args)
+                    if "reply_markup" in kwargs and kwargs["reply_markup"] is not None:
+                        kwargs["reply_markup"] = strip_button_custom_emojis(kwargs["reply_markup"])
                     try:
                         return await _orig_send_message(self, *args, **kwargs)
                     except BadRequest as e2:
@@ -484,19 +691,25 @@ def patch_bot_for_premium_emojis():
                     new_args = list(args)
                     new_args[0] = render_premium_html(new_args[0])
                     args = tuple(new_args)
+
+            if "reply_markup" in kwargs and kwargs["reply_markup"] is not None:
+                kwargs["reply_markup"] = apply_premium_emojis_to_keyboard(kwargs["reply_markup"])
+
             try:
                 return await _orig_edit_message_text(self, *args, **kwargs)
             except BadRequest as e:
                 err_msg = str(e).lower()
                 if "message is not modified" in err_msg:
                     return True
-                if any(term in err_msg for term in ("can't parse entities", "entity_text_invalid", "custom_emoji_id_invalid", "entity_bounds_invalid", "tag_empty", "failed to parse")):
+                if any(term in err_msg for term in ("can't parse entities", "entity_text_invalid", "custom_emoji_id_invalid", "entity_bounds_invalid", "tag_empty", "failed to parse", "button_icon_custom_emoji_invalid", "bot_premium_required")):
                     if "text" in kwargs and kwargs["text"]:
                         kwargs["text"] = strip_tg_emoji(kwargs["text"])
                     elif len(args) >= 1 and isinstance(args[0], str):
                         new_args = list(args)
                         new_args[0] = strip_tg_emoji(new_args[0])
                         args = tuple(new_args)
+                    if "reply_markup" in kwargs and kwargs["reply_markup"] is not None:
+                        kwargs["reply_markup"] = strip_button_custom_emojis(kwargs["reply_markup"])
                     try:
                         return await _orig_edit_message_text(self, *args, **kwargs)
                     except BadRequest as e2:
@@ -510,15 +723,21 @@ def patch_bot_for_premium_emojis():
             pm = kwargs.get("parse_mode")
             if pm == "HTML" and kwargs.get("caption"):
                 kwargs["caption"] = render_premium_html(kwargs["caption"])
+
+            if "reply_markup" in kwargs and kwargs["reply_markup"] is not None:
+                kwargs["reply_markup"] = apply_premium_emojis_to_keyboard(kwargs["reply_markup"])
+
             try:
                 return await _orig_send_photo(self, *args, **kwargs)
             except BadRequest as e:
                 err_msg = str(e).lower()
                 if "message is not modified" in err_msg:
                     return True
-                if any(term in err_msg for term in ("can't parse entities", "entity_text_invalid", "custom_emoji_id_invalid", "entity_bounds_invalid", "tag_empty", "failed to parse")):
+                if any(term in err_msg for term in ("can't parse entities", "entity_text_invalid", "custom_emoji_id_invalid", "entity_bounds_invalid", "tag_empty", "failed to parse", "button_icon_custom_emoji_invalid", "bot_premium_required")):
                     if kwargs.get("caption"):
                         kwargs["caption"] = strip_tg_emoji(kwargs["caption"])
+                    if "reply_markup" in kwargs and kwargs["reply_markup"] is not None:
+                        kwargs["reply_markup"] = strip_button_custom_emojis(kwargs["reply_markup"])
                     try:
                         return await _orig_send_photo(self, *args, **kwargs)
                     except BadRequest as e2:
@@ -532,15 +751,21 @@ def patch_bot_for_premium_emojis():
             pm = kwargs.get("parse_mode")
             if pm == "HTML" and kwargs.get("caption"):
                 kwargs["caption"] = render_premium_html(kwargs["caption"])
+
+            if "reply_markup" in kwargs and kwargs["reply_markup"] is not None:
+                kwargs["reply_markup"] = apply_premium_emojis_to_keyboard(kwargs["reply_markup"])
+
             try:
                 return await _orig_edit_message_caption(self, *args, **kwargs)
             except BadRequest as e:
                 err_msg = str(e).lower()
                 if "message is not modified" in err_msg:
                     return True
-                if any(term in err_msg for term in ("can't parse entities", "entity_text_invalid", "custom_emoji_id_invalid", "entity_bounds_invalid", "tag_empty", "failed to parse")):
+                if any(term in err_msg for term in ("can't parse entities", "entity_text_invalid", "custom_emoji_id_invalid", "entity_bounds_invalid", "tag_empty", "failed to parse", "button_icon_custom_emoji_invalid", "bot_premium_required")):
                     if kwargs.get("caption"):
                         kwargs["caption"] = strip_tg_emoji(kwargs["caption"])
+                    if "reply_markup" in kwargs and kwargs["reply_markup"] is not None:
+                        kwargs["reply_markup"] = strip_button_custom_emojis(kwargs["reply_markup"])
                     try:
                         return await _orig_edit_message_caption(self, *args, **kwargs)
                     except BadRequest as e2:
@@ -550,10 +775,24 @@ def patch_bot_for_premium_emojis():
                         return await _orig_edit_message_caption(self, *args, **kwargs)
                 raise
 
+        async def safe_edit_message_reply_markup(self, *args, **kwargs):
+            if "reply_markup" in kwargs and kwargs["reply_markup"] is not None:
+                kwargs["reply_markup"] = apply_premium_emojis_to_keyboard(kwargs["reply_markup"])
+            try:
+                return await _orig_edit_message_reply_markup(self, *args, **kwargs)
+            except BadRequest as e:
+                err_msg = str(e).lower()
+                if "message is not modified" in err_msg:
+                    return True
+                if "reply_markup" in kwargs and kwargs["reply_markup"] is not None:
+                    kwargs["reply_markup"] = strip_button_custom_emojis(kwargs["reply_markup"])
+                return await _orig_edit_message_reply_markup(self, *args, **kwargs)
+
         Bot.send_message = safe_send_message
         Bot.edit_message_text = safe_edit_message_text
         Bot.send_photo = safe_send_photo
         Bot.edit_message_caption = safe_edit_message_caption
+        Bot.edit_message_reply_markup = safe_edit_message_reply_markup
         Bot._is_premium_patched = True
 
         logger.info("Universal Telegram Premium Custom Emoji Hook initialized on Bot methods.")
