@@ -311,13 +311,16 @@ def is_admin(user_id: int) -> bool:
     return False
 
 
-def get_persistent_menu(is_admin_user: bool = False) -> ReplyKeyboardMarkup:
+def get_persistent_menu(is_admin_user: bool = False, is_vip_user: bool = False) -> ReplyKeyboardMarkup:
     """Constructs the high-aesthetic persistent bottom reply keyboard."""
     keyboard = [
         [KeyboardButton("👑 VIP Plans & Pricing"), KeyboardButton("💳 Payment Methods")],
         [KeyboardButton("👤 My Subscription"), KeyboardButton("🤝 Affiliate Hub")],
-        [KeyboardButton("📢 Official Channel")],
     ]
+    if is_vip_user:
+        keyboard.append([KeyboardButton("🔗 Access VIP Channels"), KeyboardButton("📢 Official Channel")])
+    else:
+        keyboard.append([KeyboardButton("📢 Official Channel")])
     if is_admin_user:
         keyboard.append([KeyboardButton("⚙️ Admin Control Panel")])
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, is_persistent=True)
@@ -631,10 +634,15 @@ async def render_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     keyboard = [
         [InlineKeyboardButton("👑 VIP Plans & Pricing", callback_data="plans_menu")],
-        [InlineKeyboardButton("👤 My Subscription Status", callback_data="user_status")],
-        [InlineKeyboardButton("💳 Payment Methods & Info", callback_data="payment_info")],
-        [InlineKeyboardButton("🤝 Affiliate & Reseller Hub", callback_data="affiliate_menu")],
     ]
+    if is_vip:
+        keyboard.append([InlineKeyboardButton("🔗 Access VIP Channels & Groups", callback_data="get_my_links")])
+
+    keyboard.append([
+        InlineKeyboardButton("👤 My Subscription", callback_data="user_status"),
+        InlineKeyboardButton("💳 Payment Methods", callback_data="payment_info"),
+    ])
+    keyboard.append([InlineKeyboardButton("🤝 Affiliate & Reseller Hub", callback_data="affiliate_menu")])
 
     if is_admin(user_id):
         keyboard.append([InlineKeyboardButton("⚙️ Admin Control Panel", callback_data="admin_dashboard")])
@@ -664,7 +672,7 @@ async def render_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(
                 f"🏛️ <b>{PRODUCT_NAME}</b>\n<i>Navigation menu loaded below.</i>",
                 parse_mode="HTML",
-                reply_markup=get_persistent_menu(is_admin(user_id)),
+                reply_markup=get_persistent_menu(is_admin(user_id), is_vip_user=is_vip),
             )
         except Exception:
             pass
@@ -859,10 +867,10 @@ async def render_plans_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard.append([InlineKeyboardButton("👁️ View VIP Preview Channel 🎬", url=VIP_PREVIEW_LINK)])
 
     keyboard.extend([
-        [InlineKeyboardButton("📅 Buy Monthly (30 Days)", callback_data="buy_monthly")],
-        [InlineKeyboardButton("📆 Buy Yearly (365 Days)", callback_data="buy_yearly")],
-        [InlineKeyboardButton("👑 Buy Lifetime (Forever)", callback_data="buy_lifetime")],
-        [InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu")],
+        [InlineKeyboardButton(f"📅 Buy Monthly ({p_mon.get('price_bdt', 1000)} BDT)", callback_data="buy_monthly")],
+        [InlineKeyboardButton(f"📆 Buy Yearly ({p_yr.get('price_bdt', 5000)} BDT)", callback_data="buy_yearly")],
+        [InlineKeyboardButton(f"👑 Buy Lifetime ({p_life.get('price_bdt', 8000)} BDT)", callback_data="buy_lifetime")],
+        [InlineKeyboardButton("🔙 Back to Main Menu", callback_data="main_menu")],
     ])
 
     if update.callback_query:
@@ -946,16 +954,20 @@ async def handle_buy_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, pl
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"{em_tag('cash', '💰')} <b>প্রদেয় মূল্য:</b> <b>{plan['price_bdt']} BDT</b> অথবা <b>${plan['price_usdt']} USDT</b>\n\n"
         f"{em_tag('bkash', '📱')} <b>bKash (Agent - Cash Out Only):</b>\n"
-        f"👉 <code>{bkash_num}</code>\n\n"
+        f"👉 <code>{bkash_num}</code>\n"
+        f"<i>(নম্বরে ট্যাপ করলেই কপি হয়ে যাবে)</i>\n\n"
         f"{em_tag('nagad', '📱')} <b>Nagad (Agent - Cash Out Only):</b>\n"
-        f"👉 <code>{nagad_num}</code>\n\n"
+        f"👉 <code>{nagad_num}</code>\n"
+        f"<i>(নম্বরে ট্যাপ করলেই কপি হয়ে যাবে)</i>\n\n"
         f"⚠️ <b>জরুরি সতর্কতা:</b>\n"
         f"✔️ <b>bkash, Nagad Cashout Only (Agent)</b>\n"
-        f"👆 শুধুমাত্র ক্যাশআউট করবেন (Send Money গ্রহণযোগ্য নয়)।\n\n"
+        f"👆 <b>শুধুমাত্র ক্যাশআউট করবেন</b> (Send Money গ্রহণযোগ্য নয়)।\n\n"
         f"{em_tag('binance', '🌐')} <b>Binance Pay ID:</b>\n"
-        f"👉 <code>{binance_id}</code>\n\n"
-        f"{em_tag('usdt', '💲')} <b>Usdt Trx (Trc20):</b>\n"
+        f"👉 <code>{binance_id}</code>\n"
+        f"<i>(আইডিতে ট্যাপ করলেই কপি হয়ে যাবে)</i>\n\n"
+        f"{em_tag('usdt', '💲')} <b>USDT Trx (TRC20):</b>\n"
         f"👉 <code>{usdt_addr}</code>\n"
+        f"<i>(অ্যাড্রেসে ট্যাপ করলেই কপি হয়ে যাবে)</i>\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"➡️ <b>Send ScreenShot Must</b>\n"
         f"ক্যাশআউট বা ট্রান্সফার করার পর স্ক্রিনশট বা Trx ID পাঠানো বাধ্যতামূলক।\n\n"
@@ -986,12 +998,13 @@ async def start_trx_submission(update: Update, context: ContextTypes.DEFAULT_TYP
         f"✍️ <b>পেমেন্ট প্রুফ ও Trx ID সাবমিট করুন:</b>\n\n"
         f"📸 <b>পেমেন্টের স্ক্রিনশট (Screenshot)</b> অথবা <b>Trx ID / যে নাম্বার থেকে ক্যাশআউট করেছেন</b> তা এখানে সরাসরি লিখে বা ফটো আকারে পাঠান।\n\n"
         f"➡️ <b>Send ScreenShot Must</b>\n\n"
-        f"<i>(বাতিল করতে চাইলে /cancel লিখুন)</i>"
+        f"<i>(বাতিল করতে চাইলে /cancel লিখুন অথবা নিচের বাটনে চাপ দিন)</i>"
     )
+    markup = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Cancel / Back to Plans", callback_data="plans_menu")]])
     try:
-        await query.edit_message_text(text, parse_mode="HTML")
+        await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
     except Exception:
-        await query.message.reply_text(text, parse_mode="HTML")
+        await query.message.reply_text(text, parse_mode="HTML", reply_markup=markup)
 
 
 async def handle_user_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1010,21 +1023,31 @@ async def handle_user_text_message(update: Update, context: ContextTypes.DEFAULT
 
     # Persistent Bottom Menu Bar Intercepts (Always Active)
     if msg_text in ("👑 VIP Plans & Pricing", "👑 VIP Plans", "VIP Plans & Pricing", "/plans"):
+        USER_STATES.pop(user_id, None)
         await render_plans_menu(update, context)
         return
     if msg_text in ("💳 Payment Methods", "💳 Payment Info", "Payment Methods & Info", "/payment"):
+        USER_STATES.pop(user_id, None)
         await send_payment_info(update, context)
         return
     if msg_text in ("👤 My Subscription", "👤 My Plan", "My Subscription Status", "/myplan"):
+        USER_STATES.pop(user_id, None)
         await cmd_myplan(update, context)
         return
+    if msg_text in ("🔗 Access VIP Channels", "🔗 Access VIP Channels & Groups", "Access VIP Channels", "/links"):
+        USER_STATES.pop(user_id, None)
+        await cmd_links(update, context)
+        return
     if msg_text in ("📢 Official Channel", "📢 Channel", "Official Channel"):
+        USER_STATES.pop(user_id, None)
         await send_official_channel_info(update, context)
         return
     if msg_text in ("🤝 Affiliate Hub", "🤝 Affiliate & Reseller Hub", "Affiliate Hub", "/affiliate", "/ref"):
+        USER_STATES.pop(user_id, None)
         await render_affiliate_hub(update, context)
         return
     if msg_text in ("⚙️ Admin Control Panel", "⚙️ Admin Panel", "/admin"):
+        USER_STATES.pop(user_id, None)
         if is_admin(user_id):
             await render_admin_dashboard(update, context)
         else:
@@ -1085,6 +1108,7 @@ async def handle_user_text_message(update: Update, context: ContextTypes.DEFAULT
             f"🔢 <b>প্রুফ / Trx ID:</b> <code>{safe_trx}</code>\n\n"
             f"অ্যাডমিন ভেরিফাই করা মাত্রই আপনার ইনবক্সে ওয়ান-টাইম জয়েন লিংক চলে আসবে।",
             parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Main Menu", callback_data="main_menu")]]),
         )
 
         # Alert Admins with Interactive Approval Card
@@ -1721,6 +1745,9 @@ async def render_admin_dashboard(update: Update, context: ContextTypes.DEFAULT_T
         return
 
     stats = db.get_stats()
+    pending_res_apps = len(db.get_all_pending_reseller_apps() or [])
+    pending_payouts = len(db.get_pending_payouts() or [])
+    aff_alert_badge = f" ({pending_res_apps + pending_payouts} ⚠️)" if (pending_res_apps + pending_payouts) > 0 else ""
 
     em_crw = em_tag("crown", "👑")
     em_dia = em_tag("diamond", "💎")
@@ -1737,6 +1764,8 @@ async def render_admin_dashboard(update: Update, context: ContextTypes.DEFAULT_T
         f"{em_crw} <b>Lifetime Members:</b> <b>{stats['total_lifetime']}</b> Members\n"
         f"💀 <b>Removed / Expired:</b> <b>{stats['total_removed']}</b> Users\n"
         f"{em_wal} <b>Pending Payments:</b> <b>{stats['pending_payments']}</b> Requests\n"
+        f"📝 <b>Pending Reseller Apps:</b> <b>{pending_res_apps}</b> Applications\n"
+        f"💸 <b>Pending Payouts:</b> <b>{pending_payouts}</b> Requests\n"
         f"{box_border}\n"
         f"👉 <i>নিচের অপশনগুলো ব্যবহার করে পরিচালনা করুন:</i>"
     )
@@ -1764,7 +1793,7 @@ async def render_admin_dashboard(update: Update, context: ContextTypes.DEFAULT_T
         ],
         [
             InlineKeyboardButton("💰 Edit Plan Prices", callback_data="adm_action_edit_prices"),
-            InlineKeyboardButton("🤝 Affiliate Center", callback_data="adm_aff_center"),
+            InlineKeyboardButton(f"🤝 Affiliate Center{aff_alert_badge}", callback_data="adm_aff_center"),
         ],
         [
             InlineKeyboardButton("💳 Edit Payments", callback_data="adm_action_edit_payments"),
@@ -2536,6 +2565,9 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             return
 
     # 1. Main User Navigation Callbacks (Public)
+    if data in ("main_menu", "plans_menu", "user_status", "payment_info", "affiliate_menu"):
+        USER_STATES.pop(user_id, None)
+
     if data == "main_menu":
         await safe_ack()
         await render_main_menu(update, context)
@@ -2818,11 +2850,25 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
 
         db.update_payment_status(req_id, "rejected")
         safe_rej_trx = html.escape(str(req["trx_id"] or "N/A"))
+        rej_user_msg = (
+            f"❌ <b>পেমেন্ট যাচাইকরণ ব্যর্থ হয়েছে</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"আপনার প্রেরিত পেমেন্ট প্রুফ / Trx ID (<code>{safe_rej_trx}</code>) অ্যাডমিন কর্তৃক ভেরিফাই করা সম্ভব হয়নি।\n\n"
+            f"📌 <b>সম্ভাব্য কারণ:</b>\n"
+            f"• ভুল Trx ID অথবা সেন্ড মানি করা হয়েছে (ক্যাশআউট ব্যতীত)\n"
+            f"• অস্পষ্ট স্ক্রিনশট বা পূর্বের ব্যবহৃত Trx ID\n\n"
+            f"💡 অনুগ্রহ করে সঠিক স্ক্রিনশট ও Trx ID সহ পুনরায় সাবমিট করুন অথবা সহায়তার জন্য অ্যাডমিন সাপোর্টে যোগাযোগ করুন।"
+        )
+        rej_markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("👑 Select Plan & Retry", callback_data="plans_menu")],
+            [InlineKeyboardButton("💬 Contact Support", url="https://t.me/proaccessteam")],
+        ])
         try:
             await context.bot.send_message(
                 chat_id=req["user_id"],
-                text=f"❌ Your payment submission (Trx: <code>{safe_rej_trx}</code>) could not be verified by administration. Please contact support.",
+                text=rej_user_msg,
                 parse_mode="HTML",
+                reply_markup=rej_markup,
             )
         except Exception:
             pass
@@ -3655,8 +3701,10 @@ async def render_affiliate_hub(update: Update, context: ContextTypes.DEFAULT_TYP
             keyboard.append([InlineKeyboardButton("⏳ Reseller Application Under Review", callback_data="aff_app_pending")])
         else:
             keyboard.append([InlineKeyboardButton("📝 Apply for Verified Reseller", callback_data="aff_apply_reseller")])
-        keyboard.append([InlineKeyboardButton("💸 Request Payout", callback_data="aff_payout_req")])
-        keyboard.append([InlineKeyboardButton("🛒 Buy Wholesale (Locked 🔒)", callback_data="aff_wholesale_locked")])
+        keyboard.append([
+            InlineKeyboardButton("💸 Request Payout", callback_data="aff_payout_req"),
+            InlineKeyboardButton("🛒 Wholesale (Locked 🔒)", callback_data="aff_wholesale_locked"),
+        ])
 
     keyboard.append([InlineKeyboardButton("📜 Rules & Progression Guide", callback_data="aff_rules_guide")])
     keyboard.append([InlineKeyboardButton("🔙 Back to Main Menu", callback_data="main_menu")])
@@ -4092,7 +4140,11 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Aborts any pending interactive prompt."""
     user_id = update.effective_user.id
     USER_STATES.pop(user_id, None)
-    await update.message.reply_text("Action cancelled.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Main Menu", callback_data="main_menu")]]))
+    await update.message.reply_text(
+        "❌ <b>অপারেশনটি সফলভাবে বাতিল করা হয়েছে।</b>\n\nনিচের বাটনে ট্যাপ করে মূল মেন্যুতে ফিরে যেতে পারেন:",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Main Menu", callback_data="main_menu")]]),
+    )
 
 
 # =============================================================================
