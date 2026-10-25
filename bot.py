@@ -461,9 +461,30 @@ def parse_duration(text: str) -> Tuple[int, str, bool]:
 # =============================================================================
 # 1-TIME INVITE LINK GENERATOR
 # =============================================================================
+async def is_user_in_chat(bot, chat_id: int, user_id: int) -> bool:
+    """Checks whether the user is currently inside the given chat (member/admin/creator/restricted)."""
+    try:
+        m = await bot.get_chat_member(chat_id=chat_id, user_id=user_id)
+        return m.status in ("member", "administrator", "creator", "restricted")
+    except Exception:
+        return False
+
+
+async def is_user_in_all_channels(bot, user_id: int) -> Tuple[bool, List[Dict[str, Any]]]:
+    """Checks whether the user is already inside all managed channels/groups."""
+    if not CHANNELS:
+        return True, []
+    unjoined = []
+    for ch in CHANNELS:
+        ch_id = ch["id"]
+        if not await is_user_in_chat(bot, ch_id, user_id):
+            unjoined.append(ch)
+    return len(unjoined) == 0, unjoined
+
+
 async def generate_single_use_links(bot, user_id: int) -> List[Dict[str, Any]]:
     """
-    Creates individual single-use invite links (member_limit=1) for each channel and group.
+    Creates individual single-use invite links (member_limit=1) ONLY for channels the user has not yet joined.
     Links expire in 24 hours if not clicked.
     Returns: List of dicts with name, url, type, id, error
     """
@@ -474,6 +495,12 @@ async def generate_single_use_links(bot, user_id: int) -> List[Dict[str, Any]]:
         ch_id = ch["id"]
         ch_name = ch.get("name", str(ch_id))
         ch_type = ch.get("type", "channel")
+
+        # Anti-Abuse: If user is already inside this channel, DO NOT generate a new link!
+        if await is_user_in_chat(bot, ch_id, user_id):
+            logger.info(f"User {user_id} is already inside {ch_name} ({ch_id}). Skipping link creation.")
+            continue
+
         try:
             invite = await bot.create_chat_invite_link(
                 chat_id=ch_id,
@@ -512,6 +539,29 @@ async def generate_single_use_links(bot, user_id: int) -> List[Dict[str, Any]]:
 
 async def deliver_welcome_access(bot, user_id: int, plan_name: str, expires_at_iso: str, is_lifetime: bool):
     """Sends the rich welcome card with 1-time channel and group buttons to the user."""
+    # Check if user is already inside all channels
+    all_joined, unjoined = await is_user_in_all_channels(bot, user_id)
+    if all_joined and CHANNELS:
+        already_text = (
+            f"🔒 <b>VIP এক্সেস সক্রিয় ও লকড</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"✅ <b>আপনি ইতিমধ্যেই আমাদের সব VIP চ্যানেল ও গ্রুপে যুক্ত আছেন!</b>\n\n"
+            f"🛡️ <b>নিরাপত্তা সতর্কতা:</b>\n"
+            f"লিংক কপি, লিকেজ বা অন্য কারো সাথে শেয়ারিং সম্পূর্ণ নিষিদ্ধ থাকায় নতুন কোনো ইনভাইট লিংক তৈরি হবে না।\n\n"
+            f"💡 আপনি সরাসরি টেলিগ্রামের চ্যাট লিস্ট থেকে আপনার যুক্ত থাকা VIP গ্রুপ ও চ্যানেলে প্রবেশ করতে পারেন।"
+        )
+        markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("👤 My Subscription Status", callback_data="user_status")],
+            [InlineKeyboardButton("💬 Contact Support", url="https://t.me/proaccessteam")],
+        ])
+        await bot.send_message(
+            chat_id=user_id,
+            text=already_text,
+            parse_mode="HTML",
+            reply_markup=markup,
+        )
+        return
+
     links = await generate_single_use_links(bot, user_id)
 
     if is_lifetime:
@@ -883,8 +933,14 @@ async def cmd_myplan(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"<i>মেয়াদ শেষ হওয়ার আগেই রিনিউ করে নিরবচ্ছিন্ন এক্সেস বজায় রাখুন।</i>"
     )
 
+    all_joined, _ = await is_user_in_all_channels(context.bot, user_id)
+    if all_joined and CHANNELS:
+        link_btn = InlineKeyboardButton("✅ VIP Channels (Already Joined)", callback_data="already_joined_alert")
+    else:
+        link_btn = InlineKeyboardButton("🔗 Access VIP Channels & Groups", callback_data="get_my_links")
+
     markup = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔗 Access VIP Channels & Groups", callback_data="get_my_links")],
+        [link_btn],
         [InlineKeyboardButton("🔄 Renew Subscription", callback_data="user_renew")],
         [InlineKeyboardButton("🔙 Back to Main Menu", callback_data="main_menu")],
     ])
@@ -895,22 +951,77 @@ async def cmd_myplan(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Allows active VIP members to retrieve or refresh their 1-time channel invite links anytime."""
+    """Allows active VIP members to retrieve or check their 1-time channel invite links."""
     user_id = update.effective_user.id
     sub = db.get_subscriber(user_id)
-    if sub and sub.get("status") == "active":
-        await deliver_welcome_access(
-            context.bot,
-            user_id,
-            sub["plan_name"],
-            sub["expires_at"],
-            sub["is_lifetime"]
+    if not sub or sub.get("status") != "active":
+        if update.callback_query:
+            await update.callback_query.answer("❌ আপনার কোনো সক্রিয় VIP মেম্বারশিপ নেই!", show_alert=True)
+        elif update.message:
+            await update.message.reply_text(
+                "❌ <b>আপনার কোনো সক্রিয় VIP মেম্বারশিপ নেই!</b>\n\nপ্ল্যান দেখতে /plans লিখুন।",
+                parse_mode="HTML"
+            )
+        return
+
+    # Check if user is already inside all channels
+    all_joined, _ = await is_user_in_all_channels(context.bot, user_id)
+    if all_joined and CHANNELS:
+        already_text = (
+            f"🔒 <b>VIP এক্সেস সক্রিয় ও লকড</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"✅ <b>আপনি ইতিমধ্যেই আমাদের সব VIP চ্যানেল ও গ্রুপে যুক্ত আছেন!</b>\n\n"
+            f"🛡️ <b>নিরাপত্তা সতর্কতা:</b>\n"
+            f"লিংক কপি বা অন্য কারো সাথে শেয়ারিং সম্পূর্ণ নিষিদ্ধ থাকায় নতুন কোনো ইনভাইট লিংক তৈরি হবে না। সরাসরি আপনার চ্যাট লিস্ট থেকে গ্রুপে প্রবেশ করুন।"
         )
-    else:
-        await update.message.reply_text(
-            "❌ <b>আপনার কোনো সক্রিয় VIP মেম্বারশিপ নেই!</b>\n\nপ্ল্যান দেখতে /plans লিখুন।",
-            parse_mode="HTML"
+        markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("👤 My Subscription Status", callback_data="user_status")],
+            [InlineKeyboardButton("💬 Contact Support", url="https://t.me/proaccessteam")],
+        ])
+        if update.callback_query:
+            await update.callback_query.answer("আপনি ইতিমধ্যে যুক্ত আছেন! নতুন লিংক লক করা হয়েছে।", show_alert=True)
+            if update.callback_query.message:
+                try:
+                    await update.callback_query.edit_message_text(already_text, parse_mode="HTML", reply_markup=markup)
+                except Exception:
+                    await context.bot.send_message(chat_id=user_id, text=already_text, parse_mode="HTML", reply_markup=markup)
+        elif update.message:
+            await update.message.reply_text(already_text, parse_mode="HTML", reply_markup=markup)
+        return
+
+    # If user hasn't joined, check if links were already delivered for this billing cycle
+    delivered_key = f"links_delivered_{user_id}_{sub.get('joined_at', '')}"
+    if db.get_setting(delivered_key) == "1":
+        warn_text = (
+            f"⚠️ <b>এক্সেস লিংক ইতিমধ্যে পাঠানো হয়েছে</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"আপনার অ্যাকাউন্টের জন্য ওয়ান-টাইম এক্সেস লিংক পূর্বেই পাঠানো হয়েছে।\n\n"
+            f"📌 প্রতিটি লিংক মাত্র <b>১ বার ব্যবহারযোগ্য</b>। যদি আপনি কোনো কারণে লিংক হারিয়ে থাকেন বা যুক্ত হতে সমস্যা হয়, তবে অনুগ্রহ করে সরাসরি অ্যাডমিন সাপোর্টে যোগাযোগ করুন।"
         )
+        markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("👤 My Subscription Status", callback_data="user_status")],
+            [InlineKeyboardButton("💬 Contact Admin Support", url="https://t.me/proaccessteam")],
+        ])
+        if update.callback_query:
+            await update.callback_query.answer("লিংক ইতিমধ্যে প্রদান করা হয়েছে!", show_alert=True)
+            if update.callback_query.message:
+                try:
+                    await update.callback_query.edit_message_text(warn_text, parse_mode="HTML", reply_markup=markup)
+                except Exception:
+                    await context.bot.send_message(chat_id=user_id, text=warn_text, parse_mode="HTML", reply_markup=markup)
+        elif update.message:
+            await update.message.reply_text(warn_text, parse_mode="HTML", reply_markup=markup)
+        return
+
+    # Deliver links and mark as delivered
+    db.set_setting(delivered_key, "1")
+    await deliver_welcome_access(
+        context.bot,
+        user_id,
+        sub["plan_name"],
+        sub["expires_at"],
+        sub["is_lifetime"]
+    )
 
 
 # =============================================================================
@@ -2986,6 +3097,67 @@ async def handle_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TY
                     pass
 
 
+async def handle_chat_member_join(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Real-Time Anti-Leak Ejection Engine:
+    Monitors all member joins across VIP channels and groups.
+    If an unauthorized user (not an active subscriber and not admin) joins via a leaked/shared link,
+    they are immediately ejected and banned!
+    """
+    if not update.chat_member:
+        return
+
+    chat = update.chat_member.chat
+    chat_id = chat.id
+    new_member = update.chat_member.new_chat_member
+    old_member = update.chat_member.old_chat_member
+
+    # Only monitor our managed VIP channels/groups
+    managed_ids = [c["id"] for c in CHANNELS]
+    if chat_id not in managed_ids:
+        return
+
+    was_member = old_member.status in ("member", "administrator", "creator", "restricted")
+    is_now_member = new_member.status in ("member", "restricted")
+
+    if not was_member and is_now_member:
+        joined_user = new_member.user
+        joined_user_id = joined_user.id
+
+        # Admins and bot itself are exempt
+        if is_admin(joined_user_id) or joined_user_id == context.bot.id:
+            return
+
+        sub = db.get_subscriber(joined_user_id)
+        if not sub or sub.get("status") != "active":
+            logger.warning(f"🚨 UNAUTHORIZED USER {joined_user_id} (@{joined_user.username}) joined {chat.title}! Ejecting immediately...")
+            try:
+                await context.bot.ban_chat_member(chat_id=chat_id, user_id=joined_user_id)
+                await context.bot.unban_chat_member(chat_id=chat_id, user_id=joined_user_id)
+                logger.info(f"✅ Successfully ejected unauthorized user {joined_user_id} from {chat.title}")
+            except Exception as e:
+                logger.error(f"Failed to eject unauthorized user {joined_user_id}: {e}")
+
+            # Notify Admins of the blocked leak attempt
+            safe_u_name = html.escape(str(joined_user.full_name or "Unknown"))
+            safe_u_handle = html.escape(str(joined_user.username or "none"))
+            alert_text = (
+                f"🚨 <b>UNAUTHORIZED LINK LEAK BLOCKED!</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"👤 <b>User:</b> <a href='tg://user?id={joined_user_id}'>{safe_u_name}</a> (@{safe_u_handle})\n"
+                f"🆔 <b>User ID:</b> <code>{joined_user_id}</code>\n"
+                f"📢 <b>Target:</b> {html.escape(str(chat.title or chat_id))}\n"
+                f"🛡️ <b>Action:</b> Ejected immediately (Zero active subscription found) ✅"
+            )
+            for adm in ADMIN_IDS:
+                try:
+                    await context.bot.send_message(chat_id=adm, text=alert_text, parse_mode="HTML")
+                except Exception:
+                    pass
+        else:
+            logger.info(f"Verified VIP Subscriber {joined_user_id} (@{joined_user.username}) joined {chat.title} successfully.")
+
+
 # =============================================================================
 # CALLBACK QUERY ROUTER (Inline Button Actions)
 # =============================================================================
@@ -3060,18 +3232,11 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     if data == "get_my_links":
-        sub = db.get_subscriber(user_id)
-        if sub and sub.get("status") == "active":
-            await safe_ack("Fetching your secure 1-time invite links...")
-            await deliver_welcome_access(
-                context.bot,
-                user_id,
-                sub["plan_name"],
-                sub["expires_at"],
-                sub["is_lifetime"]
-            )
-        else:
-            await safe_ack("❌ আপনার কোনো সক্রিয় VIP মেম্বারশিপ নেই!", show_alert=True)
+        await cmd_links(update, context)
+        return
+
+    if data == "already_joined_alert":
+        await safe_ack("✅ আপনি অলরেডি যুক্ত আছেন! লিংক শেয়ারিং সম্পূর্ণ লক করা হয়েছে।", show_alert=True)
         return
 
     # Plan Selection Callbacks
@@ -4858,6 +5023,7 @@ def main():
 
     # Channel & Group Automatic Addition Hook
     app.add_handler(ChatMemberHandler(handle_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER))
+    app.add_handler(ChatMemberHandler(handle_chat_member_join, ChatMemberHandler.CHAT_MEMBER))
 
     # Callbacks and Text/Photo Handlers
     app.add_handler(CallbackQueryHandler(handle_callback_query))
