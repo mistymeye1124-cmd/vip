@@ -100,6 +100,7 @@ class VaultScheduler:
                     btn_text = "🔄 Renew Subscription"
 
                 safe_name = html.escape(str(user.get("full_name") or user.get("username") or "VIP Member"))
+                preview_link = db.get_setting("vip_preview_link") or "https://t.me/PAV_CourseEdition/16"
                 text = (
                     f"{badge}\n"
                     f"━━━━━━━━━━━━━━━━━━━━\n"
@@ -107,11 +108,14 @@ class VaultScheduler:
                     f"📦 <b>প্ল্যান:</b> <b>{user['plan_name']}</b>\n"
                     f"⏳ <b>মেয়াদ শেষ:</b> <code>{formatted_expiry}</code>\n"
                     f"━━━━━━━━━━━━━━━━━━━━\n\n"
-                    f"{urgency_desc}"
+                    f"{urgency_desc}\n\n"
+                    f"🔒 <b>প্রাইস-লক হারানোর সতর্কতা:</b>\n"
+                    f"<i>মেয়াদ শেষ হয়ে চ্যানেল থেকে রিমুভ হয়ে গেলে আপনার আগের ডিসকাউন্ট রেটের 'প্রাইস-লক' অফারটি বাতিল হয়ে যাবে এবং পুনরায় জয়েন করতে নতুন বর্ধিত মূল্যে কিনতে হবে!</i>"
                 )
 
                 keyboard = InlineKeyboardMarkup([
                     [InlineKeyboardButton(btn_text, callback_data="user_renew")],
+                    [InlineKeyboardButton("⚠️ Read Price-Lock Rules 📖", url=preview_link)],
                     [
                         InlineKeyboardButton("👤 My Status", callback_data="user_status"),
                         InlineKeyboardButton("💳 Payment Methods", callback_data="payment_info")
@@ -172,14 +176,18 @@ class VaultScheduler:
 
             # 3. Notify the user in DM
             try:
+                preview_link = db.get_setting("vip_preview_link") or "https://t.me/PAV_CourseEdition/16"
                 exit_msg = (
                     f"❌ <b>মেম্বারশিপ মেয়াদ সমাপ্ত!</b>\n\n"
                     f"আপনার <b>{self.product_name}</b> এর সাবস্ক্রিপশনের মেয়াদ শেষ হয়েছে।\n\n"
                     f"সিস্টেম পলিসি অনুযায়ী সকল VIP চ্যানেল ও গ্রুপ থেকে আপনাকে স্বয়ংক্রিয়ভাবে রিমুভ করা হয়েছে।\n\n"
-                    f"পুনরায় নতুন করে এক্সেস পেতে নিচের বাটনে ক্লিক করে রিনিউ সম্পন্ন করুন।"
+                    f"⚠️ <b>প্রাইস-লক বাতিল নোটিস:</b>\n"
+                    f"মেয়াদ শেষ হয়ে যাওয়ায় আপনার পূর্বের ডিসকাউন্ট রেটের 'প্রাইস-লক' অফারটি বাতিল হয়ে গেছে। পুনরায় জয়েন করতে বর্তমান বর্ধিত রেটে নতুন সাবস্ক্রিপশন নিতে হবে।\n\n"
+                    f"👉 নিচের বাটনে ক্লিক করে বর্তমান প্ল্যান ও এক্সেস দেখে নিন:"
                 )
                 keyboard = InlineKeyboardMarkup([
-                    [InlineKeyboardButton("👑 Get New Access / Renew", callback_data="plans_menu")]
+                    [InlineKeyboardButton("👑 View Current Plans & Re-join", callback_data="plans_menu")],
+                    [InlineKeyboardButton("⚠️ Read Policy & Rules 📖", url=preview_link)],
                 ])
                 await self.bot.send_message(
                     chat_id=user_id,

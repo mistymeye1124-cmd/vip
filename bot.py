@@ -214,9 +214,33 @@ CONFIG["payment_info"] = PAYMENT_INFO
 
 # VIP Preview Channel Configuration (Loaded from SQLite first)
 VIP_PREVIEW_LINK: str = db.get_setting("vip_preview_link") or os.getenv("VIP_PREVIEW_LINK") or str(CONFIG.get("vip_preview_link") or "")
+if not VIP_PREVIEW_LINK or not VIP_PREVIEW_LINK.strip():
+    VIP_PREVIEW_LINK = "https://t.me/PAV_CourseEdition/16"
 VIP_PREVIEW_NAME: str = db.get_setting("vip_preview_name") or os.getenv("VIP_PREVIEW_NAME") or str(CONFIG.get("vip_preview_name") or "VIP Preview & Proof Channel")
 CONFIG["vip_preview_link"] = VIP_PREVIEW_LINK
 CONFIG["vip_preview_name"] = VIP_PREVIEW_NAME
+
+# VIP Rules & Price-Lock Notice Configuration (Editable via /setrules or Admin GUI)
+DEFAULT_RULES_TEXT = (
+    "⚠️ <b>জরুরি নিয়মাবলী ও প্রাইস-লক পলিসি (MUST READ):</b>\n"
+    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    "• 🔄 <b>প্রাইস হাইক:</b> প্রতি মাসে নতুন কোর্সের সাথে VIP ফি বৃদ্ধি পাবে।\n"
+    "• 🔒 <b>প্রাইস-লক সুবিধা:</b> আজ যে মূল্যে জয়েন করবেন, আজীবন ঠিক সেই নির্দিষ্ট মূল্যেই রিনিউ করতে পারবেন!\n"
+    "• ⚠️ <b>কড়া শর্ত:</b> মেয়াদ শেষ হওয়ার আগেই টানা রিনিউ রাখতে হবে। মাঝখানে গ্যাপ পড়লে বা মেয়াদ পার হলে প্রাইস-লক অফার বাতিল হয়ে নতুন বর্ধিত রেটে কিনতে হবে।\n"
+    "• 🚫 <b>অ্যান্টি-লিক ও সিকিউরিটি:</b> ১-টাইম সিঙ্গেল ইউজ লিংক। শেয়ার বা লিক করার চেষ্টা করলে কোনো নোটিস ছাড়াই পার্মানেন্ট ব্যান।\n"
+    "• ❌ <b>নো রিফান্ড:</b> ডিজিটাল ভল্ট অ্যাক্সেস ডেলিভারির পর কোনো রিফান্ড প্রযোজ্য নয়।\n"
+    "• 👁️ <b>লাইভ প্রুফ:</b> কেনার আগে সম্পূর্ণ নিয়ম ও কোর্স প্রুফ দেখতে প্রিভিউ চ্যানেল চেক করুন।"
+)
+
+def get_rules_text() -> str:
+    """Returns the custom VIP rules text if set by admin, otherwise returns DEFAULT_RULES_TEXT."""
+    try:
+        saved = db.get_setting("vip_rules_text")
+        if saved and saved.strip():
+            return saved.strip()
+    except Exception:
+        pass
+    return DEFAULT_RULES_TEXT
 
 # Force Channel Join Configuration (Loaded from SQLite first)
 FORCE_CHANNEL_ID: str = db.get_setting("force_channel_id") or os.getenv("FORCE_CHANNEL_ID") or str(CONFIG.get("force_channel_id") or "")
@@ -669,8 +693,7 @@ async def render_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tier_label = f"👑 VIP ({sub['plan_name']})" if is_vip else "⭐ Free Guest"
     status_text = "Active & Verified" if is_vip else "24/7 Instant Auto-Delivery"
     box_border = "━━━━━━━━━━━━━━━━━━━━"
-
-    preview_line = f"• 👁️ <b>Preview Channel:</b> <a href='{VIP_PREVIEW_LINK}'>ফ্রি কোর্স ডেমো ও প্রুফ দেখতে এখানে ক্লিক করুন</a>\n" if VIP_PREVIEW_LINK else ""
+    preview_url = VIP_PREVIEW_LINK or "https://t.me/PAV_CourseEdition/16"
 
     welcome_text = (
         f"{em_crw} <b>{PRODUCT_NAME} — VIP HUB</b> {em_dia}\n"
@@ -686,17 +709,17 @@ async def render_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"• {em_chn} <b>VIP Channels:</b> প্রতিদিন নতুন কোর্স রিলিজ ও সফটওয়্যার\n"
         f"• {em_grp} <b>VIP Groups:</b> সিক্রেট ডিসকাশন ও স্টুডেন্ট নেটওয়ার্ক\n"
         f"• {em_sup} <b>Live Support:</b> ২৪/৭ ডিরেক্ট অ্যাডমিন অ্যাসিস্ট্যান্স\n"
-        f"{preview_line}\n"
+        f"• 👁️ <b>Live Proof:</b> <a href='{preview_url}'>কোর্স ডেমো ও প্রুফ দেখতে এখানে ক্লিক করুন</a>\n\n"
+        f"⚠️ <b>প্রাইস-লক অফার:</b> প্রতি মাসে মূল্য বৃদ্ধি পাবে। আজ যে মূল্যে জয়েন করবেন, একটানা রিনিউ রাখলে আজীবন সেই মূল্যেই রিনিউ করতে পারবেন (Price-Lock Guarantee)!\n\n"
         f"👉 <i>নিচের বাটনগুলো ব্যবহার করে প্ল্যান ব্রাউজ বা অ্যাকাউন্ট পরিচালনা করুন:</i>"
     )
 
     keyboard = [
         [InlineKeyboardButton("👑 VIP Plans & Pricing", callback_data="plans_menu")],
+        [InlineKeyboardButton("⚠️ Important Rules & Preview 📖", url=preview_url)],
     ]
-    if VIP_PREVIEW_LINK:
-        keyboard.append([InlineKeyboardButton("👁️ Free VIP Preview Channel 🎬", url=VIP_PREVIEW_LINK)])
     if is_vip:
-        keyboard.append([InlineKeyboardButton("🔗 Access VIP Channels & Groups", callback_data="get_my_links")])
+        keyboard.append([InlineKeyboardButton("🔓 Access VIP Channels & Groups 🚀", callback_data="get_my_links")])
 
     keyboard.append([
         InlineKeyboardButton("👤 My Subscription", callback_data="user_status"),
@@ -901,12 +924,8 @@ async def render_plans_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     yr_bdt = p_yr.get("price_bdt", 5000)
     life_bdt = p_life.get("price_bdt", 8000)
 
-    preview_text = ""
-    if VIP_PREVIEW_LINK:
-        preview_text = (
-            f"\n\n👁️ <b>VIP Preview / কোর্স প্রুফ:</b>\n"
-            f"👉 জয়েন করার আগে কোর্স ভল্ট ও প্রুফ দেখতে <a href='{VIP_PREVIEW_LINK}'>এখানে ক্লিক করুন</a> 🎬"
-        )
+    rules_text = get_rules_text()
+    preview_url = VIP_PREVIEW_LINK or "https://t.me/PAV_CourseEdition/16"
 
     text = (
         f"{em_crw} <b>{PRODUCT_NAME} — VIP PLANS & PRICING</b> {em_dia}\n"
@@ -914,28 +933,28 @@ async def render_plans_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"আপনার পছন্দের প্রিমিয়াম প্ল্যানটি বেছে নিন:\n\n"
         f"<b>১. 📅 Monthly VIP (30 Days)</b>\n"
         f"• ফুল কোর্স ভল্ট ও ডিসকাশন গ্রুপ এক্সেস\n"
-        f"• ইনভেস্টমেন্ট: <b>{format_price(mon_bdt)}</b>\n\n"
+        f"• ইনভেস্টমেন্ট: <b>{format_price(mon_bdt)}</b> <i>(Price-Locked)</i>\n\n"
         f"<b>২. 📆 Yearly VIP (365 Days)</b>\n"
         f"• ৩৬৫ দিন নিরবচ্ছিন্ন আপডেট ও প্রায় ৬০% সেভিংস {em_fire}\n"
         f"• ইনভেস্টমেন্ট: <b>{format_price(yr_bdt)}</b>\n\n"
         f"<b>৩. 👑 Lifetime Access (Forever VIP)</b>\n"
         f"• একবার পেমেন্টে আজীবনের জন্য ফুল ফ্রি এক্সেস {em_zap}\n"
-        f"• ইনভেস্টমেন্ট: <b>{format_price(life_bdt)}</b>\n"
-        f"{box_border}"
-        f"{preview_text}\n\n"
+        f"• ইনভেস্টমেন্ট: <b>{format_price(life_bdt)}</b> <i>(এককালীন দিলে রিনিউয়ের ঝামেলাই নেই!)</i>\n"
+        f"{box_border}\n\n"
+        f"{rules_text}\n\n"
         f"👉 <i>যে প্ল্যানটি নিতে চান নিচের বাটনে ট্যাপ করুন:</i>"
     )
 
-    keyboard = []
-    if VIP_PREVIEW_LINK:
-        keyboard.append([InlineKeyboardButton("👁️ View VIP Preview Channel 🎬", url=VIP_PREVIEW_LINK)])
-
-    keyboard.extend([
-        [InlineKeyboardButton(f"📅 Buy Monthly ({format_btn_price(mon_bdt)})", callback_data="buy_monthly")],
-        [InlineKeyboardButton(f"📆 Buy Yearly ({format_btn_price(yr_bdt)})", callback_data="buy_yearly")],
-        [InlineKeyboardButton(f"👑 Buy Lifetime ({format_btn_price(life_bdt)})", callback_data="buy_lifetime")],
-        [InlineKeyboardButton("🔙 Back to Main Menu", callback_data="main_menu")],
-    ])
+    keyboard = [
+        [InlineKeyboardButton("⚠️ Important: Read Rules & Preview (Post #16) 📖", url=preview_url)],
+        [InlineKeyboardButton(f"📅 Monthly VIP ({format_btn_price(mon_bdt)})", callback_data="buy_monthly")],
+        [InlineKeyboardButton(f"📆 Yearly VIP ({format_btn_price(yr_bdt)})", callback_data="buy_yearly")],
+        [InlineKeyboardButton(f"👑 Lifetime VIP ({format_btn_price(life_bdt)})", callback_data="buy_lifetime")],
+        [
+            InlineKeyboardButton("💳 Payment Methods", callback_data="payment_info"),
+            InlineKeyboardButton("🔙 Back to Main Menu", callback_data="main_menu"),
+        ],
+    ]
 
     if update.callback_query:
         await update.callback_query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard), disable_web_page_preview=True)
@@ -968,9 +987,11 @@ async def send_payment_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"➡️ <b>Send ScreenShot Must</b>\n"
         f"টাকা পাঠানোর পর '👑 Select Plan & Pay' তে গিয়ে প্ল্যান সিলেক্ট করে স্ক্রিনশট ও Trx ID সাবমিট করুন।"
     )
+    preview_url = VIP_PREVIEW_LINK or "https://t.me/PAV_CourseEdition/16"
     markup = InlineKeyboardMarkup([
         [InlineKeyboardButton("👑 Select Plan & Pay", callback_data="plans_menu")],
-        [InlineKeyboardButton("🔙 Back to Menu", callback_data="main_menu")],
+        [InlineKeyboardButton("⚠️ Important Rules & Preview 📖", url=preview_url)],
+        [InlineKeyboardButton("🔙 Back to Main Menu", callback_data="main_menu")],
     ])
     if update.callback_query:
         await update.callback_query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
@@ -1032,15 +1053,11 @@ async def broadcast_vip_join(
         f"🏛️ <b>{PRODUCT_NAME}</b>-এর প্রিমিয়াম কোর্স, সিক্রেট মেথড ও লাইফটাইম রিসোর্সে যুক্ত হতে আপনিও আজই আপনার স্লট নিশ্চিত করুন!\n"
         f"<i>(বর্তমান অফার মূল্যে জয়েন করতে নিচের বাটনে ট্যাপ করুন)</i>\n"
     )
-    if VIP_PREVIEW_LINK:
-        text += f"\n👉 <i>কোর্স ভল্ট দেখতে প্রিভিউ চ্যানেল ভিজিট করুন:</i>\n"
-
+    preview_url = VIP_PREVIEW_LINK or "https://t.me/PAV_CourseEdition/16"
     buttons = [
         [InlineKeyboardButton("👑 Get VIP Access / Buy Now", callback_data="plans_menu")],
+        [InlineKeyboardButton("⚠️ Important Rules & Preview 📖", url=preview_url)],
     ]
-    if VIP_PREVIEW_LINK:
-        buttons.append([InlineKeyboardButton("👁️ Free VIP Preview Channel 🎬", url=VIP_PREVIEW_LINK)])
-
     markup = InlineKeyboardMarkup(buttons)
 
     # 1. Post to Announcement / Force Channel if configured
@@ -1089,6 +1106,8 @@ async def handle_buy_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, pl
     binance_id = PAYMENT_INFO.get("binance_pay_id", "892612368")
     usdt_addr = PAYMENT_INFO.get("usdt_trc20", "TNPg8qkhm1xQsMNsgvH6p71tNwVXV7qaJe")
 
+    preview_url = VIP_PREVIEW_LINK or "https://t.me/PAV_CourseEdition/16"
+
     text = (
         f"{em_tag('wallet', '💳')} <b>পেমেন্ট ইনস্ট্রাকশন: {plan['name']}</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
@@ -1100,7 +1119,7 @@ async def handle_buy_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, pl
         f"👉 <code>{nagad_num}</code>\n"
         f"<i>(নম্বরে ট্যাপ করলেই কপি হয়ে যাবে)</i>\n\n"
         f"⚠️ <b>জরুরি সতর্কতা:</b>\n"
-        f"✔️ <b>bkash, Nagad Cashout Only (Agent)</b>\n"
+        f"✔️ <b>bKash, Nagad Cashout Only (Agent)</b>\n"
         f"👆 <b>শুধুমাত্র ক্যাশআউট করবেন</b> (Send Money গ্রহণযোগ্য নয়)।\n\n"
         f"{em_tag('binance', '🌐')} <b>Binance Pay ID:</b>\n"
         f"👉 <code>{binance_id}</code>\n"
@@ -1109,6 +1128,11 @@ async def handle_buy_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, pl
         f"👉 <code>{usdt_addr}</code>\n"
         f"<i>(অ্যাড্রেসে ট্যাপ করলেই কপি হয়ে যাবে)</i>\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"⚠️ <b>জরুরি নিয়মাবলী ও প্রাইস-লক পলিসি:</b>\n"
+        f"• 🔒 <b>প্রাইস-লক:</b> আজ যে মূল্যে নিচ্ছেন, একটানা রিনিউ রাখলে আজীবন এই রেট থাকবে। কিন্তু মেয়াদ শেষ হয়ে গ্যাপ পড়লে প্রাইজ-লক বাতিল হবে!\n"
+        f"• 🚫 <b>সিঙ্গেল-ইউজ লিংক:</b> ১টি লিংক ১ জনের জন্য। শেয়ার বা লিক করলে কোনো নোটিস ছাড়াই পার্মানেন্ট ব্যান।\n"
+        f"• ❌ <b>নো-রিফান্ড:</b> ডিজিটাল ভল্ট অ্যাক্সেস ডেলিভারির পর কোনো রিফান্ড প্রযোজ্য নয়।\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
         f"➡️ <b>Send ScreenShot Must</b>\n"
         f"ক্যাশআউট বা ট্রান্সফার করার পর স্ক্রিনশট বা Trx ID পাঠানো বাধ্যতামূলক।\n\n"
         f"👇 নিচের <b>[ ✍️ Submit Trx ID / Proof ]</b> বাটনে ক্লিক করে প্রুফ পাঠান:"
@@ -1116,10 +1140,12 @@ async def handle_buy_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, pl
 
     keyboard = [
         [InlineKeyboardButton("✍️ Submit Trx ID / Proof", callback_data=f"submit_trx_{plan_key}")],
+        [InlineKeyboardButton("⚠️ Read Important Rules & Preview 📖", url=preview_url)],
+        [
+            InlineKeyboardButton("👑 Other Plans", callback_data="plans_menu"),
+            InlineKeyboardButton("🔙 Main Menu", callback_data="main_menu"),
+        ]
     ]
-    if VIP_PREVIEW_LINK:
-        keyboard.append([InlineKeyboardButton("👁️ View VIP Preview Channel 🎬", url=VIP_PREVIEW_LINK)])
-    keyboard.append([InlineKeyboardButton("🔙 Back to Plans", callback_data="plans_menu")])
     await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
 
 
@@ -1151,6 +1177,7 @@ async def start_trx_submission(update: Update, context: ContextTypes.DEFAULT_TYP
 
 async def handle_user_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles text submissions and payment screenshots (like TrxID or Admin inputs)."""
+    global VIP_PREVIEW_LINK, VIP_PREVIEW_NAME
     user = update.effective_user
     user_id = user.id
     msg_text = update.message.text.strip() if update.message.text else ""
@@ -1682,6 +1709,8 @@ async def handle_user_text_message(update: Update, context: ContextTypes.DEFAULT
         if text_in.lower() in ("off", "disable", "none", "remove", "clear"):
             VIP_PREVIEW_LINK = ""
             VIP_PREVIEW_NAME = ""
+            db.set_setting("vip_preview_link", "")
+            db.set_setting("vip_preview_name", "")
             save_config()
             await update.message.reply_text("✅ VIP Preview link disabled.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⚙️ Admin Dashboard", callback_data="admin_dashboard")]]))
             return
@@ -1695,6 +1724,8 @@ async def handle_user_text_message(update: Update, context: ContextTypes.DEFAULT
 
         VIP_PREVIEW_LINK = link
         VIP_PREVIEW_NAME = "VIP Preview Channel"
+        db.set_setting("vip_preview_link", link)
+        db.set_setting("vip_preview_name", VIP_PREVIEW_NAME)
         save_config()
         db.log_activity(user_id, "PREVIEW_LINK_UPDATED", link)
 
@@ -1711,10 +1742,42 @@ async def handle_user_text_message(update: Update, context: ContextTypes.DEFAULT
         await update.message.reply_text(
             f"✅ <b>VIP Preview Link সফলভাবে সেট হয়েছে!</b>\n\n"
             f"🔗 <b>লিংক:</b> {link}\n"
-            f"💾 <i>ডাটাবেজে স্থায়ীভাবে সেভ করা হয়েছে। এখন ইউজাররা /plans মেনুতে প্রিভিউ বাটন দেখতে পাবে।</i>",
+            f"💾 <i>ডাটাবেজে স্থায়ীভাবে সেভ করা হয়েছে। এখন ইউজাররা /plans ও /start মেনুতে প্রিভিউ বাটন দেখতে পাবে।</i>",
             parse_mode="HTML",
             reply_markup=markup,
             disable_web_page_preview=True,
+        )
+        return
+
+    # 12. Admin Awaiting Rules Text Input
+    if action == "admin_awaiting_rules_text":
+        new_rules = update.message.text.strip()
+        USER_STATES.pop(user_id, None)
+
+        if new_rules.lower() in ("default", "reset"):
+            db.set_setting("vip_rules_text", "")
+            db.log_activity(user_id, "RULES_RESET_DEFAULT", "Reset to default via text")
+            await update.message.reply_text(
+                "✅ <b>ভিআইপি নিয়মাবলী ও প্রাইস-লক নোটিস ডিফল্টে রিসেট হয়েছে!</b>\n\n"
+                f"{DEFAULT_RULES_TEXT}",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⚙️ Admin Dashboard", callback_data="admin_dashboard")]])
+            )
+            return
+
+        db.set_setting("vip_rules_text", new_rules)
+        db.log_activity(user_id, "RULES_UPDATED", new_rules[:100])
+
+        await update.message.reply_text(
+            f"✅ <b>ভিআইপি নিয়মাবলী সফলভাবে আপডেট হয়েছে!</b>\n\n"
+            f"💾 <i>ডাটাবেজে পার্মানেন্টলি সেভ হয়েছে এবং সব ইউজার স্ক্রিনে (/plans, /start, checkout) লাইভ হয়ে গেছে।</i>\n\n"
+            f"<b>নতুন নোটিস প্রিভিউ:</b>\n{new_rules}",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("👑 View Plans Menu", callback_data="plans_menu")],
+                [InlineKeyboardButton("⚙️ Admin Dashboard", callback_data="admin_dashboard")]
+            ]),
+            disable_web_page_preview=True
         )
         return
 
@@ -2677,10 +2740,12 @@ async def cmd_setpreview(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if args[0].lower() in ("off", "disable", "none", "remove", "clear"):
-        VIP_PREVIEW_LINK = ""
-        VIP_PREVIEW_NAME = ""
+        VIP_PREVIEW_LINK = "https://t.me/PAV_CourseEdition/16"
+        VIP_PREVIEW_NAME = "VIP Preview & Proof Channel"
+        db.set_setting("vip_preview_link", "")
+        db.set_setting("vip_preview_name", "")
         save_config()
-        await update.message.reply_text("✅ <b>VIP Preview Channel disabled!</b>", parse_mode="HTML")
+        await update.message.reply_text("✅ <b>VIP Preview Channel reset to default!</b>", parse_mode="HTML")
         return
 
     raw_link = args[0].strip()
@@ -2695,15 +2760,63 @@ async def cmd_setpreview(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     VIP_PREVIEW_LINK = link
     VIP_PREVIEW_NAME = name
+    db.set_setting("vip_preview_link", link)
+    db.set_setting("vip_preview_name", name)
     save_config()
+    db.log_activity(update.effective_user.id, "PREVIEW_LINK_UPDATED", link)
 
     await update.message.reply_text(
         f"✅ <b>VIP Preview Link Configured!</b>\n\n"
         f"👁️ <b>Name:</b> {name}\n"
         f"🔗 <b>Link:</b> {link}\n\n"
-        f"<i>ইউজাররা /plans মেনুতে এখন এই প্রিভিউ চ্যানেলের ডিরেক্ট বাটন ও লিংক দেখতে পাবেন!</i>",
+        f"<i>ইউজাররা /plans ও /start মেনুতে এখন এই প্রিভিউ চ্যানেলের ডিরেক্ট বাটন ও লিংক দেখতে পাবেন!</i>",
         parse_mode="HTML",
         disable_web_page_preview=True,
+    )
+
+
+async def cmd_setrules(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Usage:
+      /setrules <custom_rules_text>
+      /setrules default (To reset to default rules)
+    """
+    user_id = update.effective_user.id
+    if not is_admin(user_id):
+        return
+
+    args = context.args
+    if not args:
+        curr_rules = get_rules_text()
+        text = (
+            "📝 <b>VIP RULES & NOTICE CONFIGURATION</b>\n\n"
+            f"<b>বর্তমান নিয়মাবলী ও নোটিস:</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"{curr_rules}\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            "<b>Commands:</b>\n"
+            "• Set Rules: <code>/setrules &lt;your_text&gt;</code>\n"
+            "• Reset to Default: <code>/setrules default</code>"
+        )
+        await update.message.reply_text(text, parse_mode="HTML")
+        return
+
+    full_text = " ".join(args).strip()
+    if full_text.lower() in ("default", "reset"):
+        db.set_setting("vip_rules_text", "")
+        db.log_activity(user_id, "RULES_RESET_DEFAULT", "Reset via /setrules command")
+        await update.message.reply_text(
+            f"✅ <b>ভিআইপি নিয়মাবলী ডিফল্টে রিসেট করা হয়েছে!</b>\n\n{DEFAULT_RULES_TEXT}",
+            parse_mode="HTML"
+        )
+        return
+
+    db.set_setting("vip_rules_text", full_text)
+    db.log_activity(user_id, "RULES_UPDATED", full_text[:100])
+    await update.message.reply_text(
+        f"✅ <b>ভিআইপি নিয়মাবলী সফলভাবে আপডেট হয়েছে!</b>\n\n"
+        f"💾 <i>ডাটাবেজে সেভ হয়েছে এবং সব ইউজার স্ক্রিনে লাইভ হয়ে গেছে।</i>\n\n"
+        f"<b>নতুন নোটিস:</b>\n{full_text}",
+        parse_mode="HTML"
     )
 
 
@@ -2815,6 +2928,7 @@ async def handle_my_chat_member(update: Update, context: ContextTypes.DEFAULT_TY
 # CALLBACK QUERY ROUTER (Inline Button Actions)
 # =============================================================================
 async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global VIP_PREVIEW_LINK, VIP_PREVIEW_NAME
     query = update.callback_query
     data = query.data
     user = query.from_user
@@ -3455,20 +3569,79 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
 
     if data == "adm_action_preview":
         curr = f"<code>{VIP_PREVIEW_LINK}</code> ({VIP_PREVIEW_NAME})" if VIP_PREVIEW_LINK else "<i>Disabled / Not set</i>"
+        rules_preview = get_rules_text()
         text = (
-            "👁️ <b>VIP PREVIEW CHANNEL LINK</b>\n"
-            "━━━━━━━━━━━━━━━━━━━━\n"
-            f"বর্তমান লিংক: {curr}\n\n"
-            "এই লিংকটি ইউজারদের /plans মেনুতে 'View VIP Preview Channel' বাটন আকারে প্রদর্শিত হবে যাতে ইউজাররা কেনার আগে কোর্স ভল্ট ও প্রুফ দেখতে পারে।\n\n"
-            "নতুন প্রিভিউ লিংক সেট করতে নিচের বাটনে চাপ দিন অথবা কমান্ড পাঠান:\n"
-            "<code>/setpreview &lt;link&gt;</code>"
+            "👁️ <b>VIP PREVIEW CHANNEL & RULES MANAGER</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"🔗 <b>বর্তমান প্রিভিউ লিংক:</b> {curr}\n\n"
+            f"📝 <b>বর্তমান নিয়মাবলী ও প্রাইস-লক নোটিস:</b>\n"
+            f"<i>{rules_preview}</i>\n\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "💡 <b>কুইক কমান্ডস:</b>\n"
+            "• লিংক সেট করতে: <code>/setpreview &lt;link&gt;</code>\n"
+            "• নিয়মাবলী সেট করতে: <code>/setrules &lt;text&gt;</code>\n"
+            "• নিয়মাবলী রিসেট করতে: <code>/setrules default</code>"
         )
         buttons = [
-            [InlineKeyboardButton("✏️ Set / Change Preview Link", callback_data="adm_set_preview_prompt")],
+            [
+                InlineKeyboardButton("✏️ Set Preview Link", callback_data="adm_set_preview_prompt"),
+                InlineKeyboardButton("📝 Edit Rules Text", callback_data="adm_set_rules_prompt"),
+            ],
+            [
+                InlineKeyboardButton("🔄 Reset Rules (Default)", callback_data="adm_reset_rules_default"),
+            ],
         ]
-        if VIP_PREVIEW_LINK:
-            buttons.append([InlineKeyboardButton("❌ Remove Preview Link", callback_data="adm_remove_preview_link")])
-        buttons.append([InlineKeyboardButton("🔙 Back to Admin", callback_data="admin_dashboard")])
+        if VIP_PREVIEW_LINK and VIP_PREVIEW_LINK != "https://t.me/PAV_CourseEdition/16":
+            buttons[1].append(InlineKeyboardButton("❌ Remove Custom Link", callback_data="adm_remove_preview_link"))
+        buttons.append([InlineKeyboardButton("🔙 Back to Admin Dashboard", callback_data="admin_dashboard")])
+        await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(buttons), disable_web_page_preview=True)
+        return
+
+    if data == "adm_set_rules_prompt":
+        USER_STATES[user_id] = {"action": "admin_awaiting_rules_text"}
+        curr_rules = get_rules_text()
+        await query.edit_message_text(
+            "📝 <b>ভিআইপি নিয়মাবলী ও প্রাইস-লক নোটিস এডিটর:</b>\n\n"
+            "বর্তমান নোটিস:\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"{curr_rules}\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            "👉 আপনার নতুন নিয়মাবলী টেক্সটটি লিখে পাঠিয়ে দিন (HTML ট্যাগ সাপোর্ট করে)।\n\n"
+            "<i>(ডিফল্টে ফিরে যেতে চাইলে 'default' লিখে পাঠান, অথবা বাতিল করতে /cancel লিখুন)</i>",
+            parse_mode="HTML"
+        )
+        return
+
+    if data == "adm_reset_rules_default":
+        db.set_setting("vip_rules_text", "")
+        db.log_activity(user_id, "RULES_RESET_DEFAULT", "Reset via admin button")
+        await safe_ack("✅ নিয়মাবলী সফলভাবে ডিফল্টে রিসেট করা হয়েছে!", show_alert=True)
+        curr = f"<code>{VIP_PREVIEW_LINK}</code> ({VIP_PREVIEW_NAME})" if VIP_PREVIEW_LINK else "<i>Disabled / Not set</i>"
+        rules_preview = DEFAULT_RULES_TEXT
+        text = (
+            "👁️ <b>VIP PREVIEW CHANNEL & RULES MANAGER</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"🔗 <b>বর্তমান প্রিভিউ লিংক:</b> {curr}\n\n"
+            f"📝 <b>বর্তমান নিয়মাবলী ও প্রাইস-লক নোটিস (ডিফল্ট):</b>\n"
+            f"<i>{rules_preview}</i>\n\n"
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            "💡 <b>কুইক কমান্ডস:</b>\n"
+            "• লিংক সেট করতে: <code>/setpreview &lt;link&gt;</code>\n"
+            "• নিয়মাবলী সেট করতে: <code>/setrules &lt;text&gt;</code>\n"
+            "• নিয়মাবলী রিসেট করতে: <code>/setrules default</code>"
+        )
+        buttons = [
+            [
+                InlineKeyboardButton("✏️ Set Preview Link", callback_data="adm_set_preview_prompt"),
+                InlineKeyboardButton("📝 Edit Rules Text", callback_data="adm_set_rules_prompt"),
+            ],
+            [
+                InlineKeyboardButton("🔄 Reset Rules (Default)", callback_data="adm_reset_rules_default"),
+            ],
+        ]
+        if VIP_PREVIEW_LINK and VIP_PREVIEW_LINK != "https://t.me/PAV_CourseEdition/16":
+            buttons[1].append(InlineKeyboardButton("❌ Remove Custom Link", callback_data="adm_remove_preview_link"))
+        buttons.append([InlineKeyboardButton("🔙 Back to Admin Dashboard", callback_data="admin_dashboard")])
         await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(buttons), disable_web_page_preview=True)
         return
 
@@ -3483,10 +3656,12 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     if data == "adm_remove_preview_link":
-        VIP_PREVIEW_LINK = ""
-        VIP_PREVIEW_NAME = ""
+        VIP_PREVIEW_LINK = "https://t.me/PAV_CourseEdition/16"
+        VIP_PREVIEW_NAME = "VIP Preview & Proof Channel"
+        db.set_setting("vip_preview_link", "")
+        db.set_setting("vip_preview_name", "")
         save_config()
-        await safe_ack("Preview link removed!", show_alert=True)
+        await safe_ack("Custom preview link removed, reset to default!", show_alert=True)
         await render_admin_dashboard(update, context)
         return
 
@@ -4617,6 +4792,7 @@ def main():
     app.add_handler(CommandHandler("setreminders", cmd_setreminders))
     app.add_handler(CommandHandler("setforcechannel", cmd_setforcechannel))
     app.add_handler(CommandHandler("setpreview", cmd_setpreview))
+    app.add_handler(CommandHandler("setrules", cmd_setrules))
 
     # Channel & Group Automatic Addition Hook
     app.add_handler(ChatMemberHandler(handle_my_chat_member, ChatMemberHandler.MY_CHAT_MEMBER))
