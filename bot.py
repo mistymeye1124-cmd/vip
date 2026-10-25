@@ -62,6 +62,7 @@ from emojis import (
     em_tag,
     get_tg_emoji_tag,
     strip_tg_emoji,
+    strip_all_emojis,
     patch_bot_for_premium_emojis,
 )
 
@@ -1222,7 +1223,7 @@ async def handle_user_text_message(update: Update, context: ContextTypes.DEFAULT
             return
 
     # Persistent Bottom Menu Bar Intercepts (Always Active with or without emojis)
-    clean_msg = strip_all_emojis(msg_text).strip()
+    clean_msg = strip_all_emojis(msg_text).strip() if msg_text else ""
     if clean_msg in ("VIP Plans & Pricing", "VIP Plans") or msg_text in ("👑 VIP Plans & Pricing", "👑 VIP Plans", "/plans"):
         USER_STATES.pop(user_id, None)
         await render_plans_menu(update, context)
@@ -1265,9 +1266,13 @@ async def handle_user_text_message(update: Update, context: ContextTypes.DEFAULT
     # 1. User Submitting TrxID or Screenshot
     if action == "awaiting_trx":
         photo_file_id = None
+        doc_file_id = None
         if update.message.photo:
             photo_file_id = update.message.photo[-1].file_id
             trx_id = update.message.caption.strip() if update.message.caption else "📸 Screenshot Attached"
+        elif update.message.document:
+            doc_file_id = update.message.document.file_id
+            trx_id = update.message.caption.strip() if update.message.caption else "📄 Document Attached"
         else:
             trx_id = update.message.text.strip() if update.message.text else "N/A"
 
@@ -1336,6 +1341,14 @@ async def handle_user_text_message(update: Update, context: ContextTypes.DEFAULT
                     await context.bot.send_photo(
                         chat_id=adm,
                         photo=photo_file_id,
+                        caption=admin_card,
+                        parse_mode="HTML",
+                        reply_markup=markup,
+                    )
+                elif doc_file_id:
+                    await context.bot.send_document(
+                        chat_id=adm,
+                        document=doc_file_id,
                         caption=admin_card,
                         parse_mode="HTML",
                         reply_markup=markup,
@@ -4822,7 +4835,7 @@ def main():
 
     # Callbacks and Text/Photo Handlers
     app.add_handler(CallbackQueryHandler(handle_callback_query))
-    app.add_handler(MessageHandler((filters.TEXT | filters.PHOTO) & ~filters.COMMAND, handle_user_text_message))
+    app.add_handler(MessageHandler((filters.TEXT | filters.PHOTO | filters.Document.ALL) & ~filters.COMMAND, handle_user_text_message))
 
     app.run_polling(
         drop_pending_updates=True,

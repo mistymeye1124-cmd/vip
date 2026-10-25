@@ -642,6 +642,7 @@ def patch_bot_for_premium_emojis():
         _orig_send_message = Bot.send_message
         _orig_edit_message_text = Bot.edit_message_text
         _orig_send_photo = Bot.send_photo
+        _orig_send_document = Bot.send_document
         _orig_edit_message_caption = Bot.edit_message_caption
         _orig_edit_message_reply_markup = Bot.edit_message_reply_markup
 
@@ -747,6 +748,34 @@ def patch_bot_for_premium_emojis():
                         return await _orig_send_photo(self, *args, **kwargs)
                 raise
 
+        async def safe_send_document(self, *args, **kwargs):
+            pm = kwargs.get("parse_mode")
+            if pm == "HTML" and kwargs.get("caption"):
+                kwargs["caption"] = render_premium_html(kwargs["caption"])
+
+            if "reply_markup" in kwargs and kwargs["reply_markup"] is not None:
+                kwargs["reply_markup"] = apply_premium_emojis_to_keyboard(kwargs["reply_markup"])
+
+            try:
+                return await _orig_send_document(self, *args, **kwargs)
+            except BadRequest as e:
+                err_msg = str(e).lower()
+                if "message is not modified" in err_msg:
+                    return True
+                if any(term in err_msg for term in ("can't parse entities", "entity_text_invalid", "custom_emoji_id_invalid", "entity_bounds_invalid", "tag_empty", "failed to parse", "button_icon_custom_emoji_invalid", "bot_premium_required")):
+                    if kwargs.get("caption"):
+                        kwargs["caption"] = strip_tg_emoji(kwargs["caption"])
+                    if "reply_markup" in kwargs and kwargs["reply_markup"] is not None:
+                        kwargs["reply_markup"] = strip_button_custom_emojis(kwargs["reply_markup"])
+                    try:
+                        return await _orig_send_document(self, *args, **kwargs)
+                    except BadRequest as e2:
+                        if "message is not modified" in str(e2).lower():
+                            return True
+                        kwargs["parse_mode"] = None
+                        return await _orig_send_document(self, *args, **kwargs)
+                raise
+
         async def safe_edit_message_caption(self, *args, **kwargs):
             pm = kwargs.get("parse_mode")
             if pm == "HTML" and kwargs.get("caption"):
@@ -791,6 +820,7 @@ def patch_bot_for_premium_emojis():
         Bot.send_message = safe_send_message
         Bot.edit_message_text = safe_edit_message_text
         Bot.send_photo = safe_send_photo
+        Bot.send_document = safe_send_document
         Bot.edit_message_caption = safe_edit_message_caption
         Bot.edit_message_reply_markup = safe_edit_message_reply_markup
         Bot._is_premium_patched = True
