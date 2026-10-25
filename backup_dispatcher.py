@@ -64,24 +64,40 @@ async def dispatch_backup(tag: str = "PRE-UPDATE SAFETY BACKUP"):
         f"✅ <i>Your database is 100% safe, verified, and secured!</i>"
     )
 
-    bot = Bot(token)
+    from telegram.request import HTTPXRequest
+
+    req = HTTPXRequest(
+        connect_timeout=30.0,
+        read_timeout=60.0,
+        write_timeout=60.0,
+        pool_timeout=30.0,
+    )
+    bot = Bot(token, request=req)
     success = False
 
     for aid in admins:
-        try:
-            print(f"[+] Sending backup to Admin ID: {aid}...")
-            with open(backup_path, "rb") as bf:
-                await bot.send_document(
-                    chat_id=aid,
-                    document=bf,
-                    filename=filename,
-                    caption=caption,
-                    parse_mode="HTML",
-                )
-            print(f"✅ Dispatched successfully to Admin {aid}!")
-            success = True
-        except Exception as e:
-            print(f"❌ Failed to dispatch backup to Admin {aid}: {e}")
+        for attempt in range(1, 4):
+            try:
+                print(f"[+] Sending backup to Admin ID: {aid} (Attempt {attempt}/3)...")
+                with open(backup_path, "rb") as bf:
+                    await bot.send_document(
+                        chat_id=aid,
+                        document=bf,
+                        filename=filename,
+                        caption=caption,
+                        parse_mode="HTML",
+                        read_timeout=60.0,
+                        write_timeout=60.0,
+                    )
+                print(f"✅ Dispatched successfully to Admin {aid}!")
+                success = True
+                break
+            except Exception as e:
+                print(f"⚠️ Attempt {attempt} failed for Admin {aid}: {e}")
+                if attempt < 3:
+                    await asyncio.sleep(2)
+                else:
+                    print(f"❌ Failed to dispatch backup to Admin {aid} after 3 attempts.")
 
     return success
 
