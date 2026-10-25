@@ -965,9 +965,22 @@ async def render_plans_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
 
     if update.callback_query:
-        await update.callback_query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard), disable_web_page_preview=True)
-    else:
+        msg = update.callback_query.message
+        if msg and (msg.photo or msg.document):
+            try:
+                await msg.delete()
+            except Exception:
+                pass
+            await context.bot.send_message(chat_id=update.effective_user.id, text=text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard), disable_web_page_preview=True)
+            return
+        try:
+            await update.callback_query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard), disable_web_page_preview=True)
+        except Exception:
+            await context.bot.send_message(chat_id=update.effective_user.id, text=text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard), disable_web_page_preview=True)
+    elif update.message:
         await update.message.reply_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard), disable_web_page_preview=True)
+    else:
+        await context.bot.send_message(chat_id=update.effective_user.id, text=text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard), disable_web_page_preview=True)
 
 
 async def send_payment_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1002,9 +1015,22 @@ async def send_payment_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("🔙 Back to Main Menu", callback_data="main_menu")],
     ])
     if update.callback_query:
-        await update.callback_query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
+        msg = update.callback_query.message
+        if msg and (msg.photo or msg.document):
+            try:
+                await msg.delete()
+            except Exception:
+                pass
+            await context.bot.send_message(chat_id=update.effective_user.id, text=text, parse_mode="HTML", reply_markup=markup)
+            return
+        try:
+            await update.callback_query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
+        except Exception:
+            await context.bot.send_message(chat_id=update.effective_user.id, text=text, parse_mode="HTML", reply_markup=markup)
     elif update.message:
         await update.message.reply_text(text, parse_mode="HTML", reply_markup=markup)
+    else:
+        await context.bot.send_message(chat_id=update.effective_user.id, text=text, parse_mode="HTML", reply_markup=markup)
 
 
 async def send_official_channel_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3179,7 +3205,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             )
 
             try:
-                if query.message.photo:
+                if query.message.photo or query.message.document:
                     await query.edit_message_caption(caption=approved_text, parse_mode="HTML")
                 else:
                     await query.edit_message_text(text=approved_text, parse_mode="HTML")
@@ -3278,7 +3304,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         )
 
         try:
-            if query.message.photo:
+            if query.message.photo or query.message.document:
                 await query.edit_message_caption(caption=approved_text, parse_mode="HTML")
             else:
                 await query.edit_message_text(text=approved_text, parse_mode="HTML")
@@ -3330,7 +3356,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             f"👮 Action by: @{safe_admin_name}"
         )
         try:
-            if query.message.photo:
+            if query.message.photo or query.message.document:
                 await query.edit_message_caption(caption=rejected_text, parse_mode="HTML")
             else:
                 await query.edit_message_text(text=rejected_text, parse_mode="HTML")

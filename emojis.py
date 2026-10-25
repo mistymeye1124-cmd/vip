@@ -313,7 +313,7 @@ def get_custom_emoji_id(name: str) -> Optional[str]:
     clean_name = name.lower().strip()
     try:
         from database import db
-        val = db.get_system_setting(f"emoji_{clean_name}")
+        val = db.get_setting(f"emoji_{clean_name}")
         if val and str(val).strip().isdigit():
             return str(val).strip()
     except Exception:
