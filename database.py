@@ -132,10 +132,73 @@ class Database:
                 );
             """)
 
-            # Indexes for fast scheduler queries
+            # 7. Affiliate & Reseller Profiles Table
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS affiliates (
+                    user_id INTEGER PRIMARY KEY,
+                    referrer_id INTEGER,
+                    role TEXT DEFAULT 'trainee',
+                    unpaid_balance_bdt REAL DEFAULT 0.0,
+                    paid_balance_bdt REAL DEFAULT 0.0,
+                    free_months_earned INTEGER DEFAULT 0,
+                    total_leads INTEGER DEFAULT 0,
+                    total_sales INTEGER DEFAULT 0,
+                    joined_at TEXT NOT NULL
+                );
+            """)
+
+            # 8. Commission Transaction Ledger
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS affiliate_commissions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    referrer_id INTEGER NOT NULL,
+                    buyer_id INTEGER NOT NULL,
+                    payment_req_id INTEGER NOT NULL,
+                    plan_key TEXT NOT NULL,
+                    sale_amount_bdt REAL NOT NULL,
+                    reward_type TEXT NOT NULL,
+                    commission_bdt REAL DEFAULT 0.0,
+                    created_at TEXT NOT NULL
+                );
+            """)
+
+            # 9. Payout Withdrawal Request Table
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS affiliate_payouts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    amount_bdt REAL NOT NULL,
+                    payment_method TEXT NOT NULL,
+                    account_number TEXT NOT NULL,
+                    status TEXT DEFAULT 'pending',
+                    created_at TEXT NOT NULL,
+                    reviewed_at TEXT
+                );
+            """)
+
+            # Indexes for fast queries
             conn.execute("CREATE INDEX IF NOT EXISTS idx_subs_status ON subscribers(status);")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_subs_expires ON subscribers(expires_at);")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_pay_status ON payment_requests(status);")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_aff_referrer ON affiliates(referrer_id);")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_aff_payout_status ON affiliate_payouts(status);")
+            conn.commit()
+
+            # Seed default affiliate settings if not present
+            default_aff_settings = {
+                "affiliate_enabled": "1",
+                "affiliate_cash_comm_pct": "50",
+                "affiliate_monthly_vip_extend_days": "30",
+                "affiliate_min_sales_unlock": "2",
+                "affiliate_min_payout_bdt": "500",
+                "affiliate_wholesale_discount_pct": "50",
+            }
+            now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+            for s_key, s_val in default_aff_settings.items():
+                conn.execute(
+                    "INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES (?, ?, ?);",
+                    (s_key, s_val, now_iso),
+                )
             conn.commit()
 
         logger.info(f"Database initialized in WAL mode: {self.db_path}")
@@ -678,6 +741,425 @@ class Database:
         with self._get_connection() as conn:
             rows = conn.execute("SELECT key, value FROM settings;").fetchall()
             return {r[0]: r[1] for r in rows}
+
+    # =========================================================================
+    # AFFILIATE & RESELLER SYSTEM (Dynamic Level-Progression & Multi-Tier Rewards)
+    # =========================================================================
+    def record_lead(self, user_id: int, referrer_id: int) -> bool:
+        """
+        Records a referral lead with multi-layer anti-fraud checks:
+        1. Self-referral block (referrer_id == user_id)
+        2. Old lead block (existing subscriber or prior payment request)
+        3. Permanent lead lock (cannot overwrite existing referrer)
+        """
+        if not referrer_id or referrer_id <= 0 or user_id == referrer_id:
+            return False
+
+        with self._get_connection() as conn:
+            # Check if user already exists in subscribers
+            sub_exists = conn.execute(
+                "SELECT 1 FROM subscribers WHERE user_id = ? LIMIT 1;", (user_id,)
+            ).fetchone()
+            if sub_exists:
+                return False
+
+            # Check if user has prior payment requests
+            pay_exists = conn.execute(
+                "SELECT 1 FROM payment_requests WHERE user_id = ? LIMIT 1;", (user_id,)
+            ).fetchone()
+            if pay_exists:
+                return False
+
+            now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+            # Ensure referrer profile exists
+            ref_row = conn.execute(
+                "SELECT user_id FROM affiliates WHERE user_id = ?;", (referrer_id,)
+            ).fetchone()
+            if not ref_row:
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO affiliates (user_id, referrer_id, role, joined_at)
+                    VALUES (?, NULL, 'trainee', ?);
+                    """,
+                    (referrer_id, now),
+                )
+
+            # Check if user already has an affiliate profile
+            user_row = conn.execute(
+                "SELECT user_id, referrer_id FROM affiliates WHERE user_id = ?;", (user_id,)
+            ).fetchone()
+
+            if user_row:
+                # Permanent lock: cannot change referrer once set
+                if user_row["referrer_id"]:
+                    return False
+                # If was created without referrer, set it now
+                conn.execute(
+                    "UPDATE affiliates SET referrer_id = ? WHERE user_id = ?;",
+                    (referrer_id, user_id),
+                )
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO affiliates (user_id, referrer_id, role, joined_at)
+                    VALUES (?, ?, 'trainee', ?);
+                    """,
+                    (user_id, referrer_id, now),
+                )
+
+            # Increment referrer's total_leads
+            conn.execute(
+                "UPDATE affiliates SET total_leads = total_leads + 1 WHERE user_id = ?;",
+                (referrer_id,),
+            )
+            conn.commit()
+
+        self.log_activity(
+            user_id,
+            "AFFILIATE_LEAD",
+            f"Bound lead to Referrer #{referrer_id}",
+        )
+        return True
+
+    def get_or_create_affiliate(self, user_id: int) -> Dict[str, Any]:
+        """
+        Returns the affiliate profile. If missing, auto-creates with default 'trainee'.
+        Also evaluates effective display_role based on active subscription status.
+        """
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM affiliates WHERE user_id = ?;", (user_id,)
+            ).fetchone()
+            if not row:
+                conn.execute(
+                    """
+                    INSERT INTO affiliates (user_id, referrer_id, role, unpaid_balance_bdt, paid_balance_bdt, free_months_earned, total_leads, total_sales, joined_at)
+                    VALUES (?, NULL, 'trainee', 0.0, 0.0, 0, 0, 0, ?);
+                    """,
+                    (user_id, now),
+                )
+                conn.commit()
+                row = conn.execute(
+                    "SELECT * FROM affiliates WHERE user_id = ?;", (user_id,)
+                ).fetchone()
+
+            data = dict(row)
+
+            # Check subscription status for dynamic role badge if not admin-approved reseller
+            if data.get("role") != "reseller":
+                sub_row = conn.execute(
+                    "SELECT plan_key, is_lifetime, status FROM subscribers WHERE user_id = ? AND status = 'active';",
+                    (user_id,),
+                ).fetchone()
+                if sub_row:
+                    if sub_row["is_lifetime"]:
+                        data["effective_tier"] = "vip_lifetime"
+                    else:
+                        data["effective_tier"] = "vip_monthly"
+                else:
+                    data["effective_tier"] = data.get("role", "trainee")
+            else:
+                data["effective_tier"] = "reseller"
+
+            return data
+
+    def set_user_role(self, user_id: int, role: str) -> bool:
+        """Promotes or demotes an affiliate role (e.g. 'reseller', 'trainee')."""
+        self.get_or_create_affiliate(user_id)
+        with self._get_connection() as conn:
+            conn.execute("UPDATE affiliates SET role = ? WHERE user_id = ?;", (role, user_id))
+            conn.commit()
+        self.log_activity(user_id, "AFFILIATE_ROLE_SET", f"Role set to {role}")
+        return True
+
+    def process_affiliate_commission(
+        self,
+        buyer_id: int,
+        payment_req_id: int,
+        plan_key: str,
+        amount_bdt: float,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Processes affiliate commission upon successful payment approval.
+        Enforces strict business rules:
+        - System toggle check (affiliate_enabled)
+        - Renewal Rule: 0% commission on renewals (only 1st ever purchase gets reward)
+        - Monthly VIP: +1 Month (30d) free extension to subscriber account
+        - Cash Partners / Resellers: 50% commission added to unpaid balance
+        - 2-Sale Unlock Wall: 2nd sale automatically promotes Trainee to Verified Reseller
+        """
+        if self.get_setting("affiliate_enabled", "1") != "1":
+            return None
+
+        with self._get_connection() as conn:
+            # 1. Renewal check: If buyer already has prior commissions processed, 0% commission
+            prior_count = conn.execute(
+                "SELECT COUNT(*) FROM affiliate_commissions WHERE buyer_id = ?;",
+                (buyer_id,),
+            ).fetchone()[0]
+            if prior_count > 0:
+                logger.info(f"Renewal purchase by buyer {buyer_id} - 0% commission applied.")
+                return None
+
+            # 2. Get buyer's referrer
+            aff_row = conn.execute(
+                "SELECT referrer_id FROM affiliates WHERE user_id = ?;", (buyer_id,)
+            ).fetchone()
+            if not aff_row or not aff_row["referrer_id"]:
+                return None
+
+            referrer_id = aff_row["referrer_id"]
+            if referrer_id == buyer_id:
+                return None
+
+            # 3. Check referrer's profile & subscription status
+            ref_aff = self.get_or_create_affiliate(referrer_id)
+            ref_sub = self.get_subscriber(referrer_id)
+
+            now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+            min_unlock = int(self.get_setting("affiliate_min_sales_unlock", "2"))
+            unlocked_reseller = False
+
+            # Check if referrer is currently an active Monthly VIP subscriber (and not a dedicated reseller)
+            is_active_monthly_vip = (
+                ref_sub
+                and ref_sub.get("status") == "active"
+                and not ref_sub.get("is_lifetime", False)
+                and ref_aff.get("role") != "reseller"
+            )
+
+            if is_active_monthly_vip:
+                # Group 1: Monthly VIP Member -> +1 Month (30d) free renewal
+                extend_days = int(self.get_setting("affiliate_monthly_vip_extend_days", "30"))
+                duration_seconds = extend_days * 86400
+                self.renew_subscriber(
+                    user_id=referrer_id,
+                    duration_seconds=duration_seconds,
+                    new_plan_name=f"+{extend_days} Days VIP Free Referral Reward",
+                )
+
+                new_sales = ref_aff["total_sales"] + 1
+                if new_sales >= min_unlock and ref_aff.get("role") == "trainee":
+                    conn.execute("UPDATE affiliates SET role = 'reseller' WHERE user_id = ?;", (referrer_id,))
+                    unlocked_reseller = True
+
+                conn.execute(
+                    """
+                    UPDATE affiliates SET
+                        free_months_earned = free_months_earned + 1,
+                        total_sales = total_sales + 1
+                    WHERE user_id = ?;
+                    """,
+                    (referrer_id,),
+                )
+
+                conn.execute(
+                    """
+                    INSERT INTO affiliate_commissions (
+                        referrer_id, buyer_id, payment_req_id, plan_key, sale_amount_bdt, reward_type, commission_bdt, created_at
+                    ) VALUES (?, ?, ?, ?, ?, 'free_month_extend', 0.0, ?);
+                    """,
+                    (referrer_id, buyer_id, payment_req_id, plan_key, amount_bdt, now_iso),
+                )
+                conn.commit()
+
+                self.log_activity(
+                    referrer_id,
+                    "AFFILIATE_REWARD_EXTEND",
+                    f"+{extend_days}d for Ref #{buyer_id} | Plan: {plan_key}",
+                )
+
+                return {
+                    "reward_type": "free_month_extend",
+                    "referrer_id": referrer_id,
+                    "days": extend_days,
+                    "unlocked_reseller": unlocked_reseller,
+                    "total_sales": new_sales,
+                }
+            else:
+                # Group 2 & 3: Cash Commission (50% or configured %)
+                comm_pct = float(self.get_setting("affiliate_cash_comm_pct", "50"))
+                comm_bdt = round(amount_bdt * (comm_pct / 100.0), 2)
+                new_sales = ref_aff["total_sales"] + 1
+
+                if new_sales >= min_unlock and ref_aff.get("role") == "trainee":
+                    conn.execute("UPDATE affiliates SET role = 'reseller' WHERE user_id = ?;", (referrer_id,))
+                    unlocked_reseller = True
+
+                conn.execute(
+                    """
+                    UPDATE affiliates SET
+                        unpaid_balance_bdt = unpaid_balance_bdt + ?,
+                        total_sales = total_sales + 1
+                    WHERE user_id = ?;
+                    """,
+                    (comm_bdt, referrer_id),
+                )
+
+                conn.execute(
+                    """
+                    INSERT INTO affiliate_commissions (
+                        referrer_id, buyer_id, payment_req_id, plan_key, sale_amount_bdt, reward_type, commission_bdt, created_at
+                    ) VALUES (?, ?, ?, ?, ?, 'cash', ?, ?);
+                    """,
+                    (referrer_id, buyer_id, payment_req_id, plan_key, amount_bdt, comm_bdt, now_iso),
+                )
+                conn.commit()
+
+                self.log_activity(
+                    referrer_id,
+                    "AFFILIATE_REWARD_CASH",
+                    f"+{comm_bdt} BDT for Ref #{buyer_id} | Sale: {amount_bdt} BDT",
+                )
+
+                return {
+                    "reward_type": "cash",
+                    "referrer_id": referrer_id,
+                    "amount_bdt": comm_bdt,
+                    "unlocked_reseller": unlocked_reseller,
+                    "total_sales": new_sales,
+                }
+
+    def request_payout(
+        self,
+        user_id: int,
+        amount: float,
+        method: str,
+        account_number: str,
+    ) -> Tuple[bool, str, Optional[int]]:
+        """
+        Validates withdrawal criteria and records payout request atomically:
+        - Must be verified reseller or have reached min_sales_unlock
+        - Must satisfy min_payout_bdt
+        - Deducts immediately from unpaid_balance_bdt to prevent double-spending
+        """
+        aff = self.get_or_create_affiliate(user_id)
+        min_unlock = int(self.get_setting("affiliate_min_sales_unlock", "2"))
+
+        if aff.get("role") != "reseller" and aff.get("total_sales", 0) < min_unlock:
+            rem = max(1, min_unlock - aff.get("total_sales", 0))
+            return (False, f"উইথড্র করার পূর্বে আপনাকে কমপক্ষে {min_unlock}টি সেল সম্পন্ন করতে হবে। (আর বাকি: {rem}টি)", None)
+
+        min_payout = float(self.get_setting("affiliate_min_payout_bdt", "500"))
+        if amount < min_payout:
+            return (False, f"মিনিমাম পে-আউট রিকোয়েস্ট {int(min_payout)} BDT হতে হবে।", None)
+
+        if aff["unpaid_balance_bdt"] < amount:
+            return (False, f"আপনার অ্যাকাউন্টে পর্যাপ্ত ব্যালেন্স নেই। বর্তমান ব্যালেন্স: {aff['unpaid_balance_bdt']:.2f} BDT।", None)
+
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        with self._get_connection() as conn:
+            # Deduct balance immediately
+            conn.execute(
+                "UPDATE affiliates SET unpaid_balance_bdt = unpaid_balance_bdt - ? WHERE user_id = ?;",
+                (amount, user_id),
+            )
+            cursor = conn.execute(
+                """
+                INSERT INTO affiliate_payouts (user_id, amount_bdt, payment_method, account_number, status, created_at)
+                VALUES (?, ?, ?, ?, 'pending', ?);
+                """,
+                (user_id, amount, method, account_number, now),
+            )
+            conn.commit()
+            payout_id = cursor.lastrowid
+
+        self.log_activity(
+            user_id,
+            "PAYOUT_REQUESTED",
+            f"Payout #{payout_id}: {amount} BDT via {method} ({account_number})",
+        )
+        return (True, "পে-আউট রিকোয়েস্ট সফলভাবে জমা হয়েছে!", payout_id)
+
+    def approve_payout(self, payout_id: int) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
+        """Approves a payout and moves funds from unpaid to paid_balance_bdt."""
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM affiliate_payouts WHERE id = ?;", (payout_id,)
+            ).fetchone()
+            if not row or row["status"] != "pending":
+                return (False, "রিকোয়েস্টটি পাওয়া যায়নি অথবা ইতিপূর্বে প্রসেস করা হয়েছে।", None)
+
+            payout = dict(row)
+            now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+            conn.execute(
+                "UPDATE affiliate_payouts SET status = 'approved', reviewed_at = ? WHERE id = ?;",
+                (now, payout_id),
+            )
+            conn.execute(
+                "UPDATE affiliates SET paid_balance_bdt = paid_balance_bdt + ? WHERE user_id = ?;",
+                (payout["amount_bdt"], payout["user_id"]),
+            )
+            conn.commit()
+
+        self.log_activity(
+            payout["user_id"],
+            "PAYOUT_APPROVED",
+            f"Payout #{payout_id} approved: {payout['amount_bdt']} BDT",
+        )
+        return (True, "পেআউট সফলভাবে অ্যাপ্রুভ করা হয়েছে।", payout)
+
+    def reject_payout(self, payout_id: int, reason: Optional[str] = None) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
+        """Rejects a payout and refunds the deducted amount back to unpaid_balance_bdt."""
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM affiliate_payouts WHERE id = ?;", (payout_id,)
+            ).fetchone()
+            if not row or row["status"] != "pending":
+                return (False, "রিকোয়েস্টটি পাওয়া যায়নি অথবা ইতিপূর্বে প্রসেস করা হয়েছে।", None)
+
+            payout = dict(row)
+            now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+            conn.execute(
+                "UPDATE affiliate_payouts SET status = 'rejected', reviewed_at = ? WHERE id = ?;",
+                (now, payout_id),
+            )
+            # Refund amount back to unpaid balance
+            conn.execute(
+                "UPDATE affiliates SET unpaid_balance_bdt = unpaid_balance_bdt + ? WHERE user_id = ?;",
+                (payout["amount_bdt"], payout["user_id"]),
+            )
+            conn.commit()
+
+        self.log_activity(
+            payout["user_id"],
+            "PAYOUT_REJECTED",
+            f"Payout #{payout_id} rejected. Refunded {payout['amount_bdt']} BDT. Reason: {reason or 'N/A'}",
+        )
+        return (True, "পেআউট বাতিল করা হয়েছে এবং ব্যালেন্স ফেরত দেওয়া হয়েছে।", payout)
+
+    def get_pending_payouts(self) -> List[Dict[str, Any]]:
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM affiliate_payouts WHERE status = 'pending' ORDER BY id ASC;"
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def get_payout(self, payout_id: int) -> Optional[Dict[str, Any]]:
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM affiliate_payouts WHERE id = ?;", (payout_id,)
+            ).fetchone()
+            return dict(row) if row else None
+
+    def get_affiliate_stats_summary(self) -> Dict[str, Any]:
+        with self._get_connection() as conn:
+            total_affs = conn.execute("SELECT COUNT(*) FROM affiliates;").fetchone()[0]
+            total_sales = conn.execute("SELECT COALESCE(SUM(total_sales), 0) FROM affiliates;").fetchone()[0]
+            total_paid = conn.execute("SELECT COALESCE(SUM(paid_balance_bdt), 0.0) FROM affiliates;").fetchone()[0]
+            pending_count = conn.execute(
+                "SELECT COUNT(*) FROM affiliate_payouts WHERE status = 'pending';"
+            ).fetchone()[0]
+            return {
+                "total_affiliates": total_affs,
+                "total_sales": total_sales,
+                "total_paid_bdt": total_paid,
+                "pending_payouts": pending_count,
+            }
 
 
 # Global shared instance

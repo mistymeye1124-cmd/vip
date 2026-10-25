@@ -297,7 +297,8 @@ def get_persistent_menu(is_admin_user: bool = False) -> ReplyKeyboardMarkup:
     """Constructs the high-aesthetic persistent bottom reply keyboard."""
     keyboard = [
         [KeyboardButton("👑 VIP Plans & Pricing"), KeyboardButton("💳 Payment Methods")],
-        [KeyboardButton("👤 My Subscription"), KeyboardButton("📢 Official Channel")],
+        [KeyboardButton("👤 My Subscription"), KeyboardButton("🤝 Affiliate Hub")],
+        [KeyboardButton("📢 Official Channel")],
     ]
     if is_admin_user:
         keyboard.append([KeyboardButton("⚙️ Admin Control Panel")])
@@ -575,6 +576,29 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_id = user.id
 
+    # Check for referral deep-link (?start=ref_<USER_ID>)
+    if context.args and len(context.args) > 0:
+        arg = context.args[0].strip()
+        if arg.startswith("ref_"):
+            try:
+                ref_id = int(arg.replace("ref_", ""))
+                if ref_id != user_id:
+                    recorded = db.record_lead(user_id=user_id, referrer_id=ref_id)
+                    if recorded:
+                        try:
+                            lead_user_name = html.escape(user.username or user.first_name or "VIP Member")
+                            lead_msg = (
+                                f"🔔 <b>New Referral Lead!</b>\n\n"
+                                f"👤 একজন নতুন ইউজার (@{lead_user_name}, ID: <code>{user_id}</code>) "
+                                f"আপনার রেফারেল লিংক ব্যবহার করে বটে প্রবেশ করেছেন।\n"
+                                f"🎯 ইউজার কোনো VIP প্ল্যান পারচেজ করলেই আপনার অ্যাকাউন্টে রিওয়ার্ড যুক্ত হবে!"
+                            )
+                            await context.bot.send_message(chat_id=ref_id, text=lead_msg, parse_mode="HTML")
+                        except Exception:
+                            pass
+            except Exception as e:
+                logger.error(f"Error handling ref deep link: {e}")
+
     # Enforce mandatory channel join
     is_subbed, unjoined_id, unjoined_link, unjoined_name = await check_force_sub(user_id, context)
     if not is_subbed:
@@ -620,6 +644,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("👑 VIP Plans & Pricing", callback_data="plans_menu")],
         [InlineKeyboardButton("👤 My Subscription Status", callback_data="user_status")],
         [InlineKeyboardButton("💳 Payment Methods & Info", callback_data="payment_info")],
+        [InlineKeyboardButton("🤝 Affiliate & Reseller Hub", callback_data="affiliate_menu")],
     ]
 
     if is_admin(user_id):
@@ -938,6 +963,9 @@ async def handle_user_text_message(update: Update, context: ContextTypes.DEFAULT
     if msg_text in ("📢 Official Channel", "📢 Channel", "Official Channel"):
         await send_official_channel_info(update, context)
         return
+    if msg_text in ("🤝 Affiliate Hub", "🤝 Affiliate & Reseller Hub", "Affiliate Hub", "/affiliate", "/ref"):
+        await render_affiliate_hub(update, context)
+        return
     if msg_text in ("⚙️ Admin Control Panel", "⚙️ Admin Panel", "/admin"):
         if is_admin(user_id):
             await render_admin_dashboard(update, context)
@@ -962,9 +990,21 @@ async def handle_user_text_message(update: Update, context: ContextTypes.DEFAULT
             trx_id = update.message.text.strip() if update.message.text else "N/A"
 
         plan_key = state.get("plan_key")
-        plan = PLANS.get(plan_key, {"name": plan_key, "price_bdt": "N/A"})
+        is_wholesale = plan_key.startswith("ws_") if plan_key else False
+        base_plan_key = plan_key.replace("ws_", "") if is_wholesale else plan_key
+        plan = PLANS.get(base_plan_key, {"name": base_plan_key, "price_bdt": 0, "price_usdt": 0})
 
         USER_STATES.pop(user_id, None)
+
+        if is_wholesale:
+            ws_discount = float(db.get_setting("affiliate_wholesale_discount_pct", "50"))
+            ws_bdt = max(1, round(plan.get("price_bdt", 0) * ((100 - ws_discount) / 100.0)))
+            ws_usdt = max(1, round(plan.get("price_usdt", 0) * ((100 - ws_discount) / 100.0)))
+            amount_display = f"{ws_bdt} BDT / ${ws_usdt} USDT (Wholesale {int(ws_discount)}% Off)"
+            plan_display_name = f"{plan.get('name')} (Wholesale)"
+        else:
+            amount_display = f"{plan.get('price_bdt')} BDT / ${plan.get('price_usdt', 'N/A')} USDT"
+            plan_display_name = plan.get("name")
 
         # Create record in DB
         req_id = db.create_payment_request(
@@ -972,7 +1012,7 @@ async def handle_user_text_message(update: Update, context: ContextTypes.DEFAULT
             username=user.username,
             full_name=user.full_name,
             plan_key=plan_key,
-            amount=f"{plan.get('price_bdt')} BDT",
+            amount=amount_display,
             payment_method="Agent Cashout / Crypto",
             trx_id=trx_id,
         )
@@ -983,19 +1023,19 @@ async def handle_user_text_message(update: Update, context: ContextTypes.DEFAULT
 
         await update.message.reply_text(
             f"✅ <b>পেমেন্ট রিকোয়েস্ট সাবমিট হয়েছে! (ID: #{req_id})</b>\n\n"
-            f"📦 <b>প্ল্যান:</b> {plan.get('name')}\n"
+            f"📦 <b>প্ল্যান:</b> {plan_display_name}\n"
             f"🔢 <b>প্রুফ / Trx ID:</b> <code>{safe_trx}</code>\n\n"
-            f"অ্যাডমিন ভেরিফাই করা মাত্রই আপনি এই বটের ইনবক্সে সমস্ত VIP চ্যানেলের ওয়ান-টাইম জয়েন লিংক পেয়ে যাবেন।",
+            f"অ্যাডমিন ভেরিফাই করা মাত্রই আপনার ইনবক্সে ওয়ান-টাইম জয়েন লিংক চলে আসবে।",
             parse_mode="HTML",
         )
 
         # Alert Admins with Interactive Approval Card
         admin_card = (
-            f"💳 <b>[NEW PAYMENT SUBMISSION #{req_id}]</b>\n\n"
-            f"👤 <b>User:</b> <a href='tg://user?id={user_id}'>{safe_full_name}</a> (@{safe_username})\n"
+            f"💳 <b>[{'WHOLESALE CLIENT ORDER' if is_wholesale else 'NEW PAYMENT SUBMISSION'} #{req_id}]</b>\n\n"
+            f"👤 <b>{'Reseller' if is_wholesale else 'User'}:</b> <a href='tg://user?id={user_id}'>{safe_full_name}</a> (@{safe_username})\n"
             f"🆔 <b>User ID:</b> <code>{user_id}</code>\n"
-            f"📦 <b>Plan:</b> {plan.get('name')}\n"
-            f"💰 <b>Amount:</b> {plan.get('price_bdt')} BDT / ${plan.get('price_usdt', 'N/A')} USDT\n"
+            f"📦 <b>Plan:</b> {plan_display_name}\n"
+            f"💰 <b>Amount:</b> {amount_display}\n"
             f"🔢 <b>Trx ID / Note:</b> <code>{safe_trx}</code>"
         )
 
@@ -1462,6 +1502,94 @@ async def handle_user_text_message(update: Update, context: ContextTypes.DEFAULT
         )
         return
 
+    # 12. User Submitting Payout Request Info
+    if action == "aff_awaiting_payout_info":
+        text_in = update.message.text.strip()
+        method = state.get("method", "bKash")
+        USER_STATES.pop(user_id, None)
+
+        parts = text_in.split()
+        if len(parts) < 2:
+            await update.message.reply_text("❌ ফরম্যাট সঠিক হয়নি! অনুগ্রহ করে এক লাইনে অ্যাকাউন্ট নম্বর ও টাকার পরিমাণ দিন (যেমন: 01718539406 500)।")
+            return
+
+        account_num = parts[0]
+        try:
+            amount = float(parts[1])
+        except ValueError:
+            await update.message.reply_text("❌ টাকার পরিমাণ সঠিক সংখ্যায় দিন (যেমন: 500)।")
+            return
+
+        ok, err_msg, payout_id = db.request_payout(user_id, amount, method, account_num)
+        if not ok:
+            await update.message.reply_text(f"❌ {err_msg}")
+            return
+
+        await update.message.reply_text(
+            f"✅ <b>উইথড্রয়াল রিকোয়েস্ট সফলভাবে জমা হয়েছে! (#{payout_id})</b>\n\n"
+            f"💰 <b>পরিমাণ:</b> <b>{amount:.2f} BDT</b>\n"
+            f"💳 <b>পেমেন্ট মেথড:</b> <b>{method}</b>\n"
+            f"📱 <b>অ্যাকাউন্ট:</b> <code>{account_num}</code>\n\n"
+            f"⏳ <i>অ্যাডমিন ভেরিফাই করে দ্রুত আপনার নম্বরে টাকা পাঠিয়ে দেবে।</i>",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🤝 Affiliate Hub", callback_data="affiliate_menu")]]),
+        )
+
+        for adm_id in ADMIN_IDS:
+            try:
+                markup = InlineKeyboardMarkup([
+                    [
+                        InlineKeyboardButton("✅ Approve Payout", callback_data=f"aff_p_app_{payout_id}"),
+                        InlineKeyboardButton("❌ Reject Payout", callback_data=f"aff_p_rej_{payout_id}"),
+                    ]
+                ])
+                safe_username = html.escape(user.username or "none")
+                await context.bot.send_message(
+                    chat_id=adm_id,
+                    text=(
+                        f"💸 <b>NEW PAYOUT REQUEST (#{payout_id})</b>\n\n"
+                        f"👤 User: <code>{user_id}</code> (@{safe_username})\n"
+                        f"💰 Amount: <b>{amount:.2f} BDT</b>\n"
+                        f"💳 Method: <b>{method}</b>\n"
+                        f"📱 Account: <code>{account_num}</code>\n\n"
+                        f"👉 <i>অ্যাপ্রুভ বা রিজেক্ট করতে নিচের বাটন ব্যবহার করুন:</i>"
+                    ),
+                    parse_mode="HTML",
+                    reply_markup=markup,
+                )
+            except Exception as e:
+                logger.error(f"Failed to alert admin {adm_id} about payout #{payout_id}: {e}")
+        return
+
+    # 13. Admin Editing Affiliate Settings
+    if action == "admin_awaiting_aff_setting":
+        text_in = update.message.text.strip()
+        setting_key = state.get("key")
+        setting_label = state.get("label", setting_key)
+        USER_STATES.pop(user_id, None)
+
+        if not setting_key:
+            return
+
+        db.set_setting(setting_key, text_in)
+        db.log_activity(user_id, "AFFILIATE_SETTING_UPDATED", f"{setting_key}: {text_in}")
+
+        markup = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("⚙️ Edit More Settings", callback_data="adm_aff_settings"),
+                InlineKeyboardButton("🤝 Affiliate Center", callback_data="adm_aff_center"),
+            ]
+        ])
+
+        await update.message.reply_text(
+            f"✅ <b>{setting_label} সফলভাবে আপডেট হয়েছে!</b>\n\n"
+            f"নতুন ভ্যালু: <b>{text_in}</b>\n"
+            f"💾 <i>ডাটাবেজে পার্মানেন্টলি সেভ হয়ে গেছে!</i>",
+            parse_mode="HTML",
+            reply_markup=markup,
+        )
+        return
+
 
 # =============================================================================
 # ADMIN DASHBOARD & CONTROLS
@@ -1515,10 +1643,13 @@ async def render_admin_dashboard(update: Update, context: ContextTypes.DEFAULT_T
         ],
         [
             InlineKeyboardButton("💰 Edit Plan Prices", callback_data="adm_action_edit_prices"),
-            InlineKeyboardButton("💳 Edit Payments", callback_data="adm_action_edit_payments"),
+            InlineKeyboardButton("🤝 Affiliate Center", callback_data="adm_aff_center"),
         ],
         [
+            InlineKeyboardButton("💳 Edit Payments", callback_data="adm_action_edit_payments"),
             InlineKeyboardButton("💾 Backup DB Now", callback_data="adm_action_backup"),
+        ],
+        [
             InlineKeyboardButton("📢 Broadcast DM", callback_data="adm_action_broadcast"),
         ],
         [
@@ -2319,6 +2450,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             [InlineKeyboardButton("👑 VIP Plans & Pricing", callback_data="plans_menu")],
             [InlineKeyboardButton("👤 My Subscription Status", callback_data="user_status")],
             [InlineKeyboardButton("💳 Payment Methods & Info", callback_data="payment_info")],
+            [InlineKeyboardButton("🤝 Affiliate & Reseller Hub", callback_data="affiliate_menu")],
         ]
         if is_admin(uid):
             keyboard.append([InlineKeyboardButton("⚙️ Admin Control Panel", callback_data="admin_dashboard")])
@@ -2388,6 +2520,63 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             return
 
         plan_key = req["plan_key"]
+        is_wholesale = plan_key.startswith("ws_") if plan_key else False
+
+        if is_wholesale:
+            base_plan_key = plan_key.replace("ws_", "")
+            plan = PLANS.get(base_plan_key, {"name": base_plan_key, "duration_days": 30, "is_lifetime": False})
+            db.update_payment_status(req_id, "approved")
+
+            # Generate single use links for reseller's client
+            links = await generate_single_use_links(context.bot, req["user_id"])
+            links_lines = []
+            for item in links:
+                if item.get("url"):
+                    tag = "📢 Channel" if item.get("type") == "channel" else "👥 Group"
+                    links_lines.append(f"• <b>{item.get('name')}:</b> {item.get('url')}")
+            links_block = "\n".join(links_lines) if links_lines else "<i>(কোনো চ্যানেল কনফিগার করা নেই)</i>"
+
+            safe_req_user = html.escape(str(req["username"] or "none"))
+            safe_req_trx = html.escape(str(req["trx_id"] or "N/A"))
+            safe_admin_name = html.escape(str(query.from_user.username or query.from_user.id))
+
+            reseller_msg = (
+                f"🎉 <b>আপনার হোলসেল অর্ডার সফলভাবে অ্যাপ্রুভ হয়েছে! (#{req_id})</b>\n\n"
+                f"📦 <b>প্ল্যান:</b> <b>{plan['name']}</b>\n"
+                f"🔢 <b>Trx ID:</b> <code>{safe_req_trx}</code>\n\n"
+                f"🔗 <b>আপনার ক্লায়েন্টের জন্য এক্সক্লুসিভ ১-টাইম অ্যান্টি-লিক লিংকসমূহ:</b>\n\n"
+                f"{links_block}\n\n"
+                f"⚠️ <i>এই লিংকগুলো সিঙ্গেল-ইউজ (১ জন ১ বারই জয়েন করতে পারবে)। আপনার ক্লায়েন্টকে এই মেসেজটি ফরোয়ার্ড করে দিন।</i>"
+            )
+
+            try:
+                await context.bot.send_message(
+                    chat_id=req["user_id"],
+                    text=reseller_msg,
+                    parse_mode="HTML",
+                    disable_web_page_preview=True,
+                )
+            except Exception as e:
+                logger.error(f"Failed to DM wholesale links to reseller {req['user_id']}: {e}")
+
+            approved_text = (
+                f"✅ <b>WHOLESALE ORDER APPROVED (#{req_id})</b>\n\n"
+                f"👤 Reseller: <code>{req['user_id']}</code> (@{safe_req_user})\n"
+                f"📦 Plan: <b>{plan['name']} (Wholesale)</b>\n"
+                f"🔢 Trx: <code>{safe_req_trx}</code>\n"
+                f"🚀 1-Time VIP Links sent to Reseller's DM.\n"
+                f"👮 Approved by: @{safe_admin_name}"
+            )
+
+            try:
+                if query.message.photo:
+                    await query.edit_message_caption(caption=approved_text, parse_mode="HTML")
+                else:
+                    await query.edit_message_text(text=approved_text, parse_mode="HTML")
+            except Exception:
+                pass
+            return
+
         plan = PLANS.get(plan_key, {"name": plan_key, "duration_days": 30, "is_lifetime": False})
         duration_seconds = plan.get("duration_days", 30) * 86400
         is_lifetime = plan.get("is_lifetime", False)
@@ -2411,6 +2600,49 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             delivery_ok = True
         except Exception as e:
             logger.error(f"Failed to deliver links to user {req['user_id']}: {e}")
+
+        # Process Affiliate Commission
+        try:
+            comm_res = db.process_affiliate_commission(
+                buyer_id=req["user_id"],
+                payment_req_id=req_id,
+                plan_key=plan_key,
+                amount_bdt=float(plan.get("price_bdt", 0)),
+            )
+            if comm_res:
+                ref_id = comm_res["referrer_id"]
+                if comm_res["reward_type"] == "free_month_extend":
+                    ext_days = comm_res["days"]
+                    ref_alert = (
+                        f"🎉 <b>রেফারেল রিওয়ার্ড অ্যালার্ট!</b>\n\n"
+                        f"👤 আপনার রেফারেল লিংক ব্যবহার করে একজন কাস্টমার VIP প্ল্যান গ্রহণ করেছেন!\n"
+                        f"👑 আপনার অ্যাকাউন্টে <b>+{ext_days} দিন VIP সাবস্ক্রিপশন সম্পূর্ণ ফ্রিতে</b> বৃদ্ধি করা হয়েছে!\n"
+                        f"🎯 মোট সফল পেইড রেফারেল: <b>{comm_res['total_sales']}</b> টি"
+                    )
+                    if comm_res.get("unlocked_reseller"):
+                        ref_alert += (
+                            f"\n\n🚀 <b>CONGRATULATIONS!</b>\n"
+                            f"আপনি সফলভাবে ২টি সেল সম্পন্ন করে <b>Verified Reseller</b> লেভেলে উন্নীত হয়েছেন! "
+                            f"এখন থেকে আপনার ক্যাশ উইথড্র আনলক এবং আপনি সরাসরি ৫০% পাইকারি রেটে ক্লায়েন্ট লিংক কিনতে পারবেন!"
+                        )
+                    await context.bot.send_message(chat_id=ref_id, text=ref_alert, parse_mode="HTML")
+                elif comm_res["reward_type"] == "cash":
+                    c_bdt = comm_res["amount_bdt"]
+                    ref_alert = (
+                        f"💰 <b>কমিশন ক্রেডিট অ্যালার্ট!</b>\n\n"
+                        f"👤 আপনার রেফারেল লিংক ব্যবহার করে একজন কাস্টমার VIP প্ল্যান গ্রহণ করেছেন!\n"
+                        f"💵 আপনার ওয়ালেটে <b>+{c_bdt:.2f} BDT</b> কমিশন যোগ হয়েছে!\n"
+                        f"🎯 মোট সফল পেইড রেফারেল: <b>{comm_res['total_sales']}</b> টি"
+                    )
+                    if comm_res.get("unlocked_reseller"):
+                        ref_alert += (
+                            f"\n\n🚀 <b>CONGRATULATIONS!</b>\n"
+                            f"আপনি সফলভাবে ২টি সেল সম্পন্ন করে <b>Verified Reseller</b> লেভেলে উন্নীত হয়েছেন! "
+                            f"এখন থেকে আপনার ক্যাশ উইথড্র আনলক এবং আপনি সরাসরি ৫০% পাইকারি রেটে ক্লায়েন্ট লিংক কিনতে পারবেন!"
+                        )
+                    await context.bot.send_message(chat_id=ref_id, text=ref_alert, parse_mode="HTML")
+        except Exception as e:
+            logger.error(f"Error processing affiliate commission for req #{req_id}: {e}")
 
         dispatch_status = "🚀 1-Time Invite Links dispatched to member's DM." if delivery_ok else "⚠️ Member added in DB, but failed to DM links (User may have blocked bot)."
         safe_req_user = html.escape(str(req["username"] or "none"))
@@ -2991,6 +3223,564 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             )
         return
 
+    # -------------------------------------------------------------------------
+    # Affiliate & Reseller Callbacks
+    # -------------------------------------------------------------------------
+    if data == "affiliate_menu":
+        await query.answer()
+        await render_affiliate_hub(update, context)
+        return
+
+    if data == "aff_rules_guide":
+        await query.answer()
+        await render_affiliate_rules_guide(query)
+        return
+
+    if data == "aff_wholesale_locked":
+        await query.answer("🔒 এই ফিচারটি শুধুমাত্র Verified Reseller দের জন্য! ২টি সফল পেইড সেল সম্পন্ন করলে স্বয়ংক্রিয়ভাবে আনলক হবে।", show_alert=True)
+        return
+
+    if data == "aff_wholesale_plans":
+        await query.answer()
+        await render_wholesale_plans(query, user_id)
+        return
+
+    if data.startswith("ws_buy_"):
+        plan_key = data.replace("ws_buy_", "")
+        await handle_buy_wholesale(update, context, plan_key)
+        return
+
+    if data == "aff_payout_req":
+        await handle_payout_request_init(update, context)
+        return
+
+    if data.startswith("aff_pay_m_"):
+        meth = data.replace("aff_pay_m_", "")
+        await handle_payout_method_selected(update, context, meth)
+        return
+
+    if data == "adm_aff_center":
+        if is_admin(user_id):
+            await query.answer()
+            await render_admin_affiliate_center(query)
+        return
+
+    if data == "adm_aff_payouts":
+        if is_admin(user_id):
+            await query.answer()
+            await render_admin_pending_payouts(query)
+        return
+
+    if data == "adm_aff_settings":
+        if is_admin(user_id):
+            await query.answer()
+            await render_admin_affiliate_settings(query)
+        return
+
+    if data == "adm_cfg_toggle":
+        if is_admin(user_id):
+            curr = db.get_setting("affiliate_enabled", "1")
+            new_val = "0" if curr == "1" else "1"
+            db.set_setting("affiliate_enabled", new_val)
+            await query.answer(f"System: {'ON 🟢' if new_val == '1' else 'OFF 🔴'}")
+            await render_admin_affiliate_settings(query)
+        return
+
+    if data.startswith("adm_cfg_"):
+        if is_admin(user_id):
+            sub_key = data.replace("adm_cfg_", "")
+            cfg_meta = {
+                "comm": ("affiliate_cash_comm_pct", "কমিশন শতকরা হার (%)", "উদাহরণ: 50"),
+                "extend": ("affiliate_monthly_vip_extend_days", "Monthly VIP ফ্রি বর্ধিত দিন সংখ্যা", "উদাহরণ: 30"),
+                "unlock": ("affiliate_min_sales_unlock", "রিসেলার আনলকের জন্য ন্যূনতম সেল", "উদাহরণ: 2"),
+                "minpay": ("affiliate_min_payout_bdt", "ন্যূনতম পে-আউট পরিমাণ (BDT)", "উদাহরণ: 500"),
+                "wsdisc": ("affiliate_wholesale_discount_pct", "হোলসেল পাইকারি ছাড়ের হার (%)", "উদাহরণ: 50"),
+            }
+            if sub_key in cfg_meta:
+                real_key, label, example = cfg_meta[sub_key]
+                USER_STATES[user_id] = {
+                    "action": "admin_awaiting_aff_setting",
+                    "key": real_key,
+                    "label": label,
+                }
+                curr_val = db.get_setting(real_key, "")
+                await query.edit_message_text(
+                    f"⚙️ <b>Edit Setting: {label}</b>\n\n"
+                    f"বর্তমান মান: <b>{curr_val}</b>\n\n"
+                    f"নতুন মান লিখে পাঠান ({example}):\n\n"
+                    f"<i>(বাতিল করতে চাইলে /cancel লিখুন)</i>",
+                    parse_mode="HTML",
+                )
+        return
+
+    if data.startswith("aff_p_app_"):
+        if is_admin(user_id):
+            await query.answer("Approving payout...")
+            payout_id = int(data.replace("aff_p_app_", ""))
+            ok, msg, p_data = db.approve_payout(payout_id)
+            if ok and p_data:
+                try:
+                    await context.bot.send_message(
+                        chat_id=p_data["user_id"],
+                        text=(
+                            f"🎉 <b>আপনার পে-আউট অ্যাপ্রুভ হয়েছে!</b>\n\n"
+                            f"💰 <b>পরিমাণ:</b> <b>{p_data['amount_bdt']:.2f} BDT</b>\n"
+                            f"💳 <b>মেথড:</b> <b>{p_data['payment_method']}</b>\n"
+                            f"📱 <b>অ্যাকাউন্ট:</b> <code>{p_data['account_number']}</code>\n\n"
+                            f"✅ টাকা আপনার অ্যাকাউন্টে পাঠিয়ে দেওয়া হয়েছে। ধন্যবাদ!"
+                        ),
+                        parse_mode="HTML",
+                    )
+                except Exception:
+                    pass
+
+                approved_str = (
+                    f"✅ <b>PAYOUT APPROVED (#{payout_id})</b>\n\n"
+                    f"👤 User: <code>{p_data['user_id']}</code>\n"
+                    f"💰 Amount: <b>{p_data['amount_bdt']:.2f} BDT</b>\n"
+                    f"💳 Method: <b>{p_data['payment_method']}</b> (<code>{p_data['account_number']}</code>)\n"
+                    f"👮 Action by: @{html.escape(str(query.from_user.username or query.from_user.id))}"
+                )
+                try:
+                    await query.edit_message_text(approved_str, parse_mode="HTML")
+                except Exception:
+                    pass
+            else:
+                await query.answer(f"❌ {msg}", show_alert=True)
+        return
+
+    if data.startswith("aff_p_rej_"):
+        if is_admin(user_id):
+            await query.answer("Rejecting payout...")
+            payout_id = int(data.replace("aff_p_rej_", ""))
+            ok, msg, p_data = db.reject_payout(payout_id, "Rejected by admin")
+            if ok and p_data:
+                try:
+                    await context.bot.send_message(
+                        chat_id=p_data["user_id"],
+                        text=(
+                            f"❌ <b>পে-আউট বাতিল করা হয়েছে!</b>\n\n"
+                            f"💰 <b>পরিমাণ:</b> <b>{p_data['amount_bdt']:.2f} BDT</b>\n"
+                            f"💳 <b>মেথড:</b> <b>{p_data['payment_method']}</b>\n\n"
+                            f"টাকা আপনার ওয়ালেটে ফেরত দেওয়া হয়েছে। কোনো জিজ্ঞাসা থাকলে সাপোর্টে যোগাযোগ করুন।"
+                        ),
+                        parse_mode="HTML",
+                    )
+                except Exception:
+                    pass
+
+                rejected_str = (
+                    f"❌ <b>PAYOUT REJECTED (#{payout_id})</b>\n\n"
+                    f"👤 User: <code>{p_data['user_id']}</code>\n"
+                    f"💰 Amount: <b>{p_data['amount_bdt']:.2f} BDT (Refunded)</b>\n"
+                    f"👮 Action by: @{html.escape(str(query.from_user.username or query.from_user.id))}"
+                )
+                try:
+                    await query.edit_message_text(rejected_str, parse_mode="HTML")
+                except Exception:
+                    pass
+            else:
+                await query.answer(f"❌ {msg}", show_alert=True)
+        return
+
+
+# =============================================================================
+# AFFILIATE & RESELLER HUB UI & ADMIN CONTROLS
+# =============================================================================
+async def render_affiliate_hub(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Renders the aesthetic Affiliate & Reseller Hub Dashboard."""
+    user = update.effective_user
+    user_id = user.id
+
+    aff = db.get_or_create_affiliate(user_id)
+    min_unlock = int(db.get_setting("affiliate_min_sales_unlock", "2"))
+    extend_days = int(db.get_setting("affiliate_monthly_vip_extend_days", "30"))
+    ws_discount = float(db.get_setting("affiliate_wholesale_discount_pct", "50"))
+    bot_info = await context.bot.get_me()
+    bot_username = bot_info.username or "PAV_CourseEdition_bot"
+    ref_link = f"https://t.me/{bot_username}?start=ref_{user_id}"
+
+    is_reseller = aff.get("role") == "reseller" or aff.get("total_sales", 0) >= min_unlock
+    effective_tier = aff.get("effective_tier", "trainee")
+
+    if is_reseller:
+        badge = "💼 <b>Level 2: Verified Reseller</b> 🟢"
+        tier_perk = f"• <i>ক্যাশ উইথড্র সম্পূর্ণ আনলকড ও ক্লায়েন্টের জন্য {int(ws_discount)}% পাইকারি রেটে লিংক কেনার সুবিধা সক্রিয়।</i>"
+    elif effective_tier == "vip_monthly":
+        badge = f"👑 <b>VIP Member (+{extend_days}d Free Renewal Mode)</b>"
+        tier_perk = f"• <i>প্রতিটি সফল পেইড রেফারেলে আপনার VIP অ্যাকাউন্টে <b>+{extend_days} দিন সম্পূর্ণ ফ্রি</b> যোগ হবে!</i>"
+    else:
+        badge = "⭐ <b>Level 1: Trainee Promoter</b>"
+        tier_perk = f"• <i>কমিশন ওয়ালেটে জমা হচ্ছে। উইথড্র আনলক করতে কমপক্ষে {min_unlock}টি সেল সম্পন্ন করুন।</i>"
+
+    sales = aff.get("total_sales", 0)
+    filled_blocks = min(5, int((sales / max(1, min_unlock)) * 5))
+    progress_bar = "█" * filled_blocks + "░" * (5 - filled_blocks)
+    box_border = "━━━━━━━━━━━━━━━━━━━━"
+
+    text = (
+        f"🤝 <b>{PRODUCT_NAME} — AFFILIATE & RESELLER HUB</b>\n"
+        f"{box_border}\n"
+        f"👤 <b>প্রোফাইল আইডি:</b> <code>#{user_id}</code>\n"
+        f"🎖️ <b>বর্তমান টায়ার:</b> {badge}\n"
+        f"{tier_perk}\n"
+        f"{box_border}\n"
+        f"📊 <b>লাইভ পারফরম্যান্স ড্যাশবোর্ড:</b>\n"
+        f"• 👥 <b>টোটাল রেফারেল লিড:</b> <b>{aff['total_leads']}</b> জন\n"
+        f"• 🎯 <b>সফল পেইড সেলস:</b> <b>{sales}</b> টি\n"
+    )
+
+    if not is_reseller and effective_tier != "vip_monthly":
+        text += f"• 🚀 <b>রিসেলার আনলক প্রোগ্রেস:</b> <code>[{progress_bar}] {sales}/{min_unlock}</code>\n"
+
+    text += (
+        f"• 💰 <b>উইথড্রযোগ্য ব্যালেন্স:</b> <b>{aff['unpaid_balance_bdt']:.2f} BDT</b>\n"
+        f"• 💳 <b>মোট পেইড (উইথড্রন):</b> <b>{aff['paid_balance_bdt']:.2f} BDT</b>\n"
+    )
+
+    if aff.get("free_months_earned", 0) > 0 or effective_tier == "vip_monthly":
+        text += f"• 👑 <b>ফ্রি VIP দিন/মাস অর্জন:</b> <b>{aff['free_months_earned']}</b> মাস (+{aff['free_months_earned'] * extend_days} দিন)\n"
+
+    text += (
+        f"{box_border}\n"
+        f"🔗 <b>আপনার পার্সোনাল রেফারেল লিংক:</b>\n"
+        f"<code>{ref_link}</code>\n"
+        f"<i>(লিংকের ওপর ট্যাপ করলেই কপি হয়ে যাবে। যেকোনো গ্রুপ বা সোশ্যাল মিডিয়ায় প্রমোট করুন)</i>\n"
+    )
+
+    keyboard = [
+        [InlineKeyboardButton("💸 Request Payout", callback_data="aff_payout_req")],
+    ]
+
+    if is_reseller or is_admin(user_id):
+        keyboard.append([InlineKeyboardButton("🛒 Buy Wholesale for Client", callback_data="aff_wholesale_plans")])
+    else:
+        keyboard.append([InlineKeyboardButton("🛒 Buy Wholesale for Client (Locked 🔒)", callback_data="aff_wholesale_locked")])
+
+    keyboard.append([InlineKeyboardButton("📜 Rules & Progression Guide", callback_data="aff_rules_guide")])
+    keyboard.append([InlineKeyboardButton("🔙 Back to Main Menu", callback_data="main_menu")])
+
+    markup = InlineKeyboardMarkup(keyboard)
+    if update.callback_query:
+        try:
+            await update.callback_query.edit_message_text(text, parse_mode="HTML", reply_markup=markup, disable_web_page_preview=True)
+        except Exception:
+            await update.callback_query.message.reply_text(text, parse_mode="HTML", reply_markup=markup, disable_web_page_preview=True)
+    else:
+        await update.message.reply_text(text, parse_mode="HTML", reply_markup=markup, disable_web_page_preview=True)
+
+
+async def render_affiliate_rules_guide(query: Any):
+    """Explains the 3-Tier model, progression, wholesale benefits, and anti-fraud rules."""
+    extend_days = int(db.get_setting("affiliate_monthly_vip_extend_days", "30"))
+    comm_pct = int(float(db.get_setting("affiliate_cash_comm_pct", "50")))
+    min_unlock = int(db.get_setting("affiliate_min_sales_unlock", "2"))
+    min_payout = int(float(db.get_setting("affiliate_min_payout_bdt", "500")))
+    ws_discount = int(float(db.get_setting("affiliate_wholesale_discount_pct", "50")))
+
+    guide_text = (
+        f"📜 <b>AFFILIATE & RESELLER SYSTEM — নিয়মাবলী ও গাইড</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"<b>১. 👑 Monthly VIP Members (কমিশনের বদলে ফ্রি মেম্বারশিপ):</b>\n"
+        f"• আপনি যদি বর্তমান মান্থলি VIP মেম্বার হন, তবে প্রতিটি সফল রেফারেলে ক্যাশের বদলে সরাসরি <b>+{extend_days} দিন VIP মেয়াদ ফ্রি বৃদ্ধি</b> পাবে!\n"
+        f"• যত রেফারেল করবেন, তত মাস ফ্রিতে VIP কোর্স এক্সেস উপভোগ করবেন।\n\n"
+        f"<b>২. 👤 General Promoters (লেভেল প্রোগ্রেশন):</b>\n"
+        f"• <b>Level 1 (Trainee):</b> আপনি শুধু রেফারেল লিংক শেয়ার করবেন। কাস্টমার বটে এসে ফুল প্রাইসে কিনলে আপনার অ্যাকাউন্টে {comm_pct}% কমিশন জমা হবে। ব্যালেন্স উইথড্র করতে কমপক্ষে {min_unlock}টি সেল সম্পন্ন করতে হবে।\n"
+        f"• <b>Level 2 (Verified Reseller):</b> {min_unlock} টি পেইড সেল সম্পন্ন হলেই আপনার উইথড্র আনলক হবে এবং ৩য় সেল থেকে <b>হোলসেল পাইকারি সুবিধা</b> আনলক হয়ে যাবে!\n\n"
+        f"<b>৩. 🛒 Wholesale (পাইকারি রেটে ক্লায়েন্ট লিংক কেনা):</b>\n"
+        f"• ভেরিফাইড রিসেলাররা ক্লায়েন্টের কাছ থেকে ফুল টাকা নিজের কাছে রেখে, মালিককে মাত্র {ws_discount}% পাইকারি রেট দিয়ে সাথে সাথে ১-টাইম অ্যান্টি-লিক লিংক নিয়ে কাস্টমারকে দিতে পারবেন!\n\n"
+        f"<b>৪. 🔄 রিনিউয়াল রুল (সবচেয়ে গুরুত্বপূর্ণ):</b>\n"
+        f"• কমিশন প্রযোজ্য হবে শুধুমাত্র কাস্টমারের <b>১ম মাসের/১ম বারের পারচেজে</b>। কাস্টমার যখন ২য় মাস থেকে রিনিউ করবে, সেই রিনিউয়াল ফি ১০০% মালিকের প্রাপ্য (০% কমিশন)।\n\n"
+        f"<b>৫. 🛡️ অ্যান্টি-ফ্রড নীতি:</b>\n"
+        f"• নিজের একাউন্ট নিজে রেফার করা নিষিদ্ধ। বট শুরুর লিড পার্মানেন্টলি লক থাকে। মিনিমাম উইথড্র {min_payout} BDT (bKash/Nagad/Binance)।"
+    )
+    markup = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Affiliate Hub", callback_data="affiliate_menu")]])
+    await query.edit_message_text(guide_text, parse_mode="HTML", reply_markup=markup)
+
+
+async def render_wholesale_plans(query: Any, user_id: int):
+    """Renders wholesale plans with dynamic discount for verified resellers."""
+    aff = db.get_or_create_affiliate(user_id)
+    min_unlock = int(db.get_setting("affiliate_min_sales_unlock", "2"))
+    if aff.get("role") != "reseller" and aff.get("total_sales", 0) < min_unlock and not is_admin(user_id):
+        await query.answer("🔒 এই ফিচারটি শুধুমাত্র Verified Reseller দের জন্য!", show_alert=True)
+        return
+
+    ws_discount = float(db.get_setting("affiliate_wholesale_discount_pct", "50"))
+    text = (
+        f"🛒 <b>RESELLER WHOLESALE PORTAL — পাইকারি রেট</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"এখানে আপনি পাইকারি মূল্যে ক্লায়েন্টের জন্য ইনস্ট্যান্ট ১-টাইম VIP লিংক কিনতে পারবেন।\n"
+        f"👉 ক্লায়েন্টের কাছ থেকে ফুল প্রাইস নিন, আর মালিককে শুধুমাত্র পাইকারি রেট দিন ({int(ws_discount)}% ছাড়)!\n\n"
+        f"📦 <b>উপলব্ধ পাইকারি প্ল্যানসমূহ:</b>\n"
+    )
+
+    keyboard = []
+    for pk, pv in PLANS.items():
+        ws_bdt = max(1, round(pv["price_bdt"] * ((100 - ws_discount) / 100.0)))
+        ws_usdt = max(1, round(pv["price_usdt"] * ((100 - ws_discount) / 100.0)))
+        text += f"• <b>{pv['name']}:</b> <code>{ws_bdt} BDT / ${ws_usdt} USDT</code> <i>(রেগুলার {pv['price_bdt']} BDT)</i>\n"
+        keyboard.append([InlineKeyboardButton(f"🛒 Buy {pv['name']} ({ws_bdt} BDT)", callback_data=f"ws_buy_{pk}")])
+
+    keyboard.append([InlineKeyboardButton("🔙 Back to Affiliate Hub", callback_data="affiliate_menu")])
+    await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+async def handle_buy_wholesale(update: Update, context: ContextTypes.DEFAULT_TYPE, plan_key: str):
+    """Starts checkout for a wholesale plan at 50% discount for client dispatch."""
+    query = update.callback_query
+    user_id = query.from_user.id
+    await query.answer()
+
+    if plan_key not in PLANS:
+        await query.edit_message_text("❌ প্ল্যান পাওয়া যায়নি।")
+        return
+
+    plan = PLANS[plan_key]
+    ws_discount = float(db.get_setting("affiliate_wholesale_discount_pct", "50"))
+    ws_bdt = max(1, round(plan["price_bdt"] * ((100 - ws_discount) / 100.0)))
+    ws_usdt = max(1, round(plan["price_usdt"] * ((100 - ws_discount) / 100.0)))
+
+    bkash = PAYMENT_INFO.get("bkash", "01718539406")
+    nagad = PAYMENT_INFO.get("nagad", "01718539406")
+    binance = PAYMENT_INFO.get("binance_pay_id", "892612368")
+    usdt_addr = PAYMENT_INFO.get("usdt_trc20", "TNPg8qkhm1xQsMNsgvH6p71tNwVXV7qaJe")
+
+    USER_STATES[user_id] = {
+        "action": "awaiting_trx",
+        "plan_key": f"ws_{plan_key}",
+    }
+
+    text = (
+        f"🛒 <b>WHOLESALE ORDER CHECKOUT — ক্লায়েন্ট লিংক পারচেজ</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"📦 <b>প্ল্যান:</b> <b>{plan['name']}</b>\n"
+        f"💰 <b>পাইকারি প্রদেয় মূল্য ({int(ws_discount)}% Off):</b> <b>{ws_bdt} BDT / ${ws_usdt} USDT</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"📲 <b>পেমেন্ট অ্যাকাউন্টসমূহ:</b>\n"
+        f"• 🔴 <b>bKash (Agent Cashout):</b> <code>{bkash}</code>\n"
+        f"• 🟠 <b>Nagad (Agent Cashout):</b> <code>{nagad}</code>\n"
+        f"• 🟡 <b>Binance Pay ID:</b> <code>{binance}</code>\n"
+        f"• 🌐 <b>USDT (TRC20):</b> <code>{usdt_addr}</code>\n\n"
+        f"👉 <b>টাকা পাঠানোর পর ট্রানজেকশন আইডি (TrxID) বা স্ক্রিনশট পাঠিয়ে দিন।</b>\n"
+        f"<i>অ্যাডমিন অ্যাপ্রুভ করলেই ক্লায়েন্টের জন্য এক্সক্লুসিভ ১-টাইম অ্যান্টি-লিক লিংক আপনার ইনবক্সে চলে আসবে।</i>\n\n"
+        f"<i>(বাতিল করতে চাইলে /cancel লিখুন)</i>"
+    )
+
+    markup = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Cancel / Back", callback_data="aff_wholesale_plans")]])
+    await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
+
+
+async def handle_payout_request_init(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    user_id = query.from_user.id
+
+    aff = db.get_or_create_affiliate(user_id)
+    min_unlock = int(db.get_setting("affiliate_min_sales_unlock", "2"))
+    if aff.get("role") != "reseller" and aff.get("total_sales", 0) < min_unlock and not is_admin(user_id):
+        rem = max(1, min_unlock - aff.get("total_sales", 0))
+        await query.answer(f"🔒 উইথড্র লকড! আনলক করতে আরও {rem}টি পেইড সেল সম্পন্ন করতে হবে।", show_alert=True)
+        return
+
+    min_payout = float(db.get_setting("affiliate_min_payout_bdt", "500"))
+    if aff["unpaid_balance_bdt"] < min_payout:
+        await query.answer(f"⚠️ অপর্যাপ্ত ব্যালেন্স! মিনিমাম পে-আউট {int(min_payout)} BDT। (বর্তমান: {aff['unpaid_balance_bdt']:.2f} BDT)", show_alert=True)
+        return
+
+    await query.answer()
+    text = (
+        f"💸 <b>REQUEST PAYOUT — কমিশন উইথড্রয়াল</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"💰 <b>আপনার মোট জমা ব্যালেন্স:</b> <b>{aff['unpaid_balance_bdt']:.2f} BDT</b>\n"
+        f"💵 <b>মিনিমাম পে-আউট:</b> <b>{int(min_payout)} BDT</b>\n\n"
+        f"👉 <i>যে মাধ্যমে টাকা গ্রহণ করতে চান তা সিলেক্ট করুন:</i>"
+    )
+
+    keyboard = [
+        [
+            InlineKeyboardButton("🔴 bKash", callback_data="aff_pay_m_bkash"),
+            InlineKeyboardButton("🟠 Nagad", callback_data="aff_pay_m_nagad"),
+        ],
+        [
+            InlineKeyboardButton("🟡 Binance Pay ID", callback_data="aff_pay_m_binance"),
+        ],
+        [InlineKeyboardButton("🔙 Back to Affiliate Hub", callback_data="affiliate_menu")],
+    ]
+    await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+async def handle_payout_method_selected(update: Update, context: ContextTypes.DEFAULT_TYPE, method: str):
+    query = update.callback_query
+    user_id = query.from_user.id
+    await query.answer()
+
+    method_label = {
+        "bkash": "bKash (Personal / Agent)",
+        "nagad": "Nagad (Personal / Agent)",
+        "binance": "Binance Pay ID / USDT",
+    }.get(method.lower(), method.upper())
+
+    USER_STATES[user_id] = {
+        "action": "aff_awaiting_payout_info",
+        "method": method_label,
+    }
+
+    aff = db.get_or_create_affiliate(user_id)
+    text = (
+        f"📱 <b>{method_label} — অ্যাকাউন্ট ও টাকার পরিমাণ দিন</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"💰 <b>বর্তমান ব্যালেন্স:</b> <b>{aff['unpaid_balance_bdt']:.2f} BDT</b>\n\n"
+        f"অনুগ্রহ করে আপনার <b>অ্যাকাউন্ট নম্বর</b> এবং <b>টাকার পরিমাণ</b> এক লাইনে স্পেস দিয়ে লিখে পাঠান:\n\n"
+        f"<b>উদাহরণ:</b>\n"
+        f"<code>01718539406 500</code>\n\n"
+        f"<i>(বাতিল করতে /cancel টাইপ করুন)</i>"
+    )
+
+    markup = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Cancel", callback_data="affiliate_menu")]])
+    await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
+
+
+async def render_admin_affiliate_center(query: Any):
+    """Renders the comprehensive Admin Affiliate & Reseller Management Center."""
+    stats = db.get_affiliate_stats_summary()
+    enabled = db.get_setting("affiliate_enabled", "1") == "1"
+    status_icon = "🟢 ACTIVE / ON" if enabled else "🔴 DISABLED / OFF"
+
+    text = (
+        f"🤝 <b>AFFILIATE & RESELLER CONTROL CENTER</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"⚙️ <b>সিস্টেম স্ট্যাটাস:</b> <b>{status_icon}</b>\n\n"
+        f"📊 <b>সামগ্রিক পরিসংখ্যান:</b>\n"
+        f"• 👥 <b>মোট নিবন্ধিত এফিলিয়েট:</b> <b>{stats['total_affiliates']}</b> জন\n"
+        f"• 🎯 <b>মোট রেফারেল সেলস:</b> <b>{stats['total_sales']}</b> টি\n"
+        f"• 💳 <b>মোট পরিশোধিত কমিশন:</b> <b>{stats['total_paid_bdt']:.2f} BDT</b>\n"
+        f"• ⏳ <b>পেন্ডিং উইথড্র রিকোয়েস্ট:</b> <b>{stats['pending_payouts']}</b> টি\n\n"
+        f"👉 <i>নিচের অপশনগুলো ব্যবহার করে পেআউট ও কনফিগারেশন নিয়ন্ত্রণ করুন:</i>"
+    )
+
+    keyboard = [
+        [InlineKeyboardButton(f"📋 Pending Payouts ({stats['pending_payouts']})", callback_data="adm_aff_payouts")],
+        [InlineKeyboardButton("⚙️ Edit Affiliate Settings", callback_data="adm_aff_settings")],
+        [InlineKeyboardButton("🔙 Back to Admin Dashboard", callback_data="admin_dashboard")],
+    ]
+    await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+async def render_admin_affiliate_settings(query: Any):
+    """Interactive Settings Control for Affiliate Engine."""
+    comm_pct = db.get_setting("affiliate_cash_comm_pct", "50")
+    extend_days = db.get_setting("affiliate_monthly_vip_extend_days", "30")
+    min_unlock = db.get_setting("affiliate_min_sales_unlock", "2")
+    min_payout = db.get_setting("affiliate_min_payout_bdt", "500")
+    ws_discount = db.get_setting("affiliate_wholesale_discount_pct", "50")
+    enabled = db.get_setting("affiliate_enabled", "1") == "1"
+
+    text = (
+        f"⚙️ <b>AFFILIATE & RESELLER SETTINGS</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"যে কোনো বাটনে ক্লিক করে সংশ্লিষ্ট মান সরাসরি পরিবর্তন করতে পারবেন:\n"
+    )
+
+    keyboard = [
+        [
+            InlineKeyboardButton(f"💰 Commission: {comm_pct}%", callback_data="adm_cfg_comm"),
+            InlineKeyboardButton(f"📅 VIP Extend: {extend_days}d", callback_data="adm_cfg_extend"),
+        ],
+        [
+            InlineKeyboardButton(f"🔒 Unlock Sales: {min_unlock}", callback_data="adm_cfg_unlock"),
+            InlineKeyboardButton(f"💵 Min Payout: {min_payout} BDT", callback_data="adm_cfg_minpay"),
+        ],
+        [
+            InlineKeyboardButton(f"🛒 Wholesale Disc: {ws_discount}%", callback_data="adm_cfg_wsdisc"),
+            InlineKeyboardButton(f"🔌 System: {'ON 🟢' if enabled else 'OFF 🔴'}", callback_data="adm_cfg_toggle"),
+        ],
+        [InlineKeyboardButton("🔙 Back to Affiliate Center", callback_data="adm_aff_center")],
+    ]
+    await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+async def render_admin_pending_payouts(query: Any):
+    """Lists pending payout requests with 1-click Approve / Reject buttons."""
+    payouts = db.get_pending_payouts()
+    if not payouts:
+        text = (
+            "📋 <b>PENDING PAYOUT REQUESTS</b>\n\n"
+            "<i>বর্তমানে কোনো পেন্ডিং পেআউট রিকোয়েস্ট নেই!</i>"
+        )
+        markup = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Affiliate Center", callback_data="adm_aff_center")]])
+        await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
+        return
+
+    text = f"📋 <b>পেন্ডিং পেআউট রিকোয়েস্টসমূহ ({len(payouts)} টি):</b>\n\n"
+    keyboard = []
+    for p in payouts[:8]:
+        pid = p["id"]
+        uid = p["user_id"]
+        amt = p["amount_bdt"]
+        meth = p["payment_method"]
+        acc = p["account_number"]
+        text += (
+            f"• <b>Req #{pid}:</b> <code>{amt:.2f} BDT</code> via <b>{meth}</b>\n"
+            f"  User: <code>{uid}</code> | Acc: <code>{acc}</code>\n"
+        )
+        keyboard.append([
+            InlineKeyboardButton(f"✅ Approve #{pid}", callback_data=f"aff_p_app_{pid}"),
+            InlineKeyboardButton(f"❌ Reject #{pid}", callback_data=f"aff_p_rej_{pid}"),
+        ])
+
+    keyboard.append([InlineKeyboardButton("🔙 Back to Affiliate Center", callback_data="adm_aff_center")])
+    await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+async def cmd_setreseller(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin command to promote a user to Verified Reseller. Usage: /setreseller <user_id>"""
+    if not is_admin(update.effective_user.id):
+        return
+    args = context.args
+    if not args:
+        await update.message.reply_text("❌ Usage: <code>/setreseller &lt;user_id&gt;</code>", parse_mode="HTML")
+        return
+    try:
+        target_id = int(args[0])
+        db.set_user_role(target_id, "reseller")
+        await update.message.reply_text(f"✅ User <code>{target_id}</code> has been promoted to <b>Verified Reseller</b>!", parse_mode="HTML")
+        try:
+            await context.bot.send_message(
+                chat_id=target_id,
+                text=(
+                    "🎉 <b>CONGRATULATIONS!</b>\n\n"
+                    "অ্যাডমিন আপনাকে সরাসরি <b>Verified Reseller</b> হিসেবে অনুমোদন করেছেন!\n"
+                    "🚀 আপনার অ্যাকাউন্টে ক্যাশ উইথড্র আনলক হয়েছে এবং আপনি এখন থেকে ৫০% পাইকারি রেটে ক্লায়েন্ট লিংক কিনতে পারবেন।\n"
+                    "👉 হাব দেখতে /start দিন অথবা '🤝 Affiliate Hub' প্রেস করুন।"
+                ),
+                parse_mode="HTML",
+            )
+        except Exception:
+            pass
+    except ValueError:
+        await update.message.reply_text("❌ User ID অবশ্যই সংখ্যা হতে হবে।")
+
+
+async def cmd_delreseller(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin command to demote a reseller to Trainee. Usage: /delreseller <user_id>"""
+    if not is_admin(update.effective_user.id):
+        return
+    args = context.args
+    if not args:
+        await update.message.reply_text("❌ Usage: <code>/delreseller &lt;user_id&gt;</code>", parse_mode="HTML")
+        return
+    try:
+        target_id = int(args[0])
+        db.set_user_role(target_id, "trainee")
+        await update.message.reply_text(f"✅ User <code>{target_id}</code> role demoted to <b>Trainee</b>.", parse_mode="HTML")
+    except ValueError:
+        await update.message.reply_text("❌ User ID অবশ্যই সংখ্যা হতে হবে।")
+
+
+async def cmd_affiliate(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Opens the Affiliate & Reseller Hub."""
+    await render_affiliate_hub(update, context)
+
 
 
 async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3065,6 +3855,8 @@ def main():
     # User Commands
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("myplan", cmd_myplan))
+    app.add_handler(CommandHandler("affiliate", cmd_affiliate))
+    app.add_handler(CommandHandler("ref", cmd_affiliate))
     app.add_handler(CommandHandler("links", cmd_links))
     app.add_handler(CommandHandler("plans", render_plans_menu))
     app.add_handler(CommandHandler("payment", send_payment_info))
@@ -3072,6 +3864,8 @@ def main():
 
     # Admin Commands
     app.add_handler(CommandHandler("admin", cmd_admin))
+    app.add_handler(CommandHandler("setreseller", cmd_setreseller))
+    app.add_handler(CommandHandler("delreseller", cmd_delreseller))
     app.add_handler(CommandHandler("add", cmd_add))
     app.add_handler(CommandHandler("renew", cmd_renew))
     app.add_handler(CommandHandler("remove", cmd_remove))
