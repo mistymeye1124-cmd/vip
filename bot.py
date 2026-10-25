@@ -803,6 +803,13 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await send_force_sub_message(update, context, unjoined_link, unjoined_name)
         return
 
+    # Check for direct section routing (?start=plans, ?start=vip, ?start=pricing)
+    if context.args and len(context.args) > 0:
+        arg_lower = context.args[0].strip().lower()
+        if arg_lower in ("plans", "vip", "buy", "pricing"):
+            await render_plans_menu(update, context)
+            return
+
     await render_main_menu(update, context)
 
 
@@ -1041,22 +1048,46 @@ async def broadcast_vip_join(
     else:
         masked_name = clean_name
 
-    handle = f"@{buyer_username}" if buyer_username else "Student"
+    handle_str = f" (@{buyer_username})" if buyer_username else ""
+
+    # Telegram Premium Animated Custom Emojis (<tg-emoji emoji-id="...">char</tg-emoji>)
+    em_fire = em_tag("fire", "🔥")
+    em_crw = em_tag("crown", "👑")
+    em_dia = em_tag("diamond", "💎")
+    em_zap = em_tag("zap", "⚡")
+    em_chk = em_tag("check", "✅")
+    em_box = em_tag("box", "📦")
+    em_spk = em_tag("sparkle", "✨")
+    em_clm = em_tag("free_claim", "🎉")
+    em_ver = em_tag("verify", "🛡️")
+    box_border = "━━━━━━━━━━━━━━━━━━━━"
 
     text = (
-        f"🔥 <b>NEW VIP MEMBER ENROLLED!</b> 🚀\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"🎉 অভিনন্দন <b>{html.escape(masked_name)}</b> ({handle})!\n"
-        f"📦 <b>এনরোল্ড প্ল্যান:</b> <b>{html.escape(plan_name)}</b>\n"
-        f"💎 <b>স্ট্যাটাস:</b> <code>Full Vault Access Unlocked ✅</code>\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n\n"
-        f"🏛️ <b>{PRODUCT_NAME}</b>-এর প্রিমিয়াম কোর্স, সিক্রেট মেথড ও লাইফটাইম রিসোর্সে যুক্ত হতে আপনিও আজই আপনার স্লট নিশ্চিত করুন!\n"
-        f"<i>(বর্তমান অফার মূল্যে জয়েন করতে নিচের বাটনে ট্যাপ করুন)</i>\n"
+        f"{em_fire} <b>NEW VIP MEMBER ENROLLED!</b> {em_zap}\n"
+        f"{box_border}\n"
+        f"{em_clm} অভিনন্দন <b>{html.escape(masked_name)}</b>{handle_str}!\n"
+        f"{em_box} <b>এনরোল্ড প্ল্যান:</b> <b>{html.escape(plan_name)}</b>\n"
+        f"{em_dia} <b>স্ট্যাটাস:</b> <code>Full Vault Access Unlocked {em_chk}</code>\n"
+        f"{box_border}\n\n"
+        f"{em_ver} <b>{PRODUCT_NAME}</b>-এর প্রিমিয়াম কোর্স, সিক্রেট মেথড ও লাইফটাইম রিসোর্সে যুক্ত হতে আপনিও আজই আপনার স্লট নিশ্চিত করুন!\n\n"
+        f"{em_spk} <i>বর্তমান অফার মূল্যে জয়েন করতে অথবা ফ্রি প্রিভিউ দেখতে নিচের বাটনে ক্লিক করুন:</i>\n"
     )
+
+    try:
+        bot_info = await bot.get_me()
+        bot_uname = bot_info.username or "PAV_CourseEdition_bot"
+    except Exception:
+        bot_uname = "PAV_CourseEdition_bot"
+
+    bot_start_url = f"https://t.me/{bot_uname}?start=plans"
     preview_url = VIP_PREVIEW_LINK or "https://t.me/PAV_CourseEdition/16"
+
+    # In Telegram channels, inline buttons MUST be URL buttons.
+    # Button 1 deep-links into bot's VIP Plans & Pricing menu (?start=plans).
+    # Button 2 links directly to Post #16 (VIP Preview Video & Proof).
     buttons = [
-        [InlineKeyboardButton("👑 Get VIP Access / Buy Now", callback_data="plans_menu")],
-        [InlineKeyboardButton("⚠️ Important Rules & Preview 📖", url=preview_url)],
+        [InlineKeyboardButton("👑 Get VIP Access / Buy Now 🚀", url=bot_start_url)],
+        [InlineKeyboardButton("👁️ Free VIP Preview & Proof 🎬", url=preview_url)],
     ]
     markup = InlineKeyboardMarkup(buttons)
 
@@ -2123,15 +2154,6 @@ async def cmd_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # Deliver 1-time links to user
         await deliver_welcome_access(context.bot, target_id, label, sub["expires_at"], is_lifetime)
-        asyncio.create_task(
-            broadcast_vip_join(
-                bot=context.bot,
-                buyer_id=target_id,
-                buyer_username=None,
-                buyer_name="VIP Member",
-                plan_name=label,
-            )
-        )
 
         await update.message.reply_text(
             f"✅ <b>Member Added Successfully!</b>\n"
