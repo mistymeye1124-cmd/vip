@@ -67,7 +67,7 @@ class VaultScheduler:
             user_id = user["user_id"]
             try:
                 expiry_dt = datetime.datetime.fromisoformat(user["expires_at"])
-                formatted_expiry = expiry_dt.strftime("%d %b %Y, %I:%M %p (UTC)")
+                formatted_expiry = expiry_dt.strftime("%d %b %Y, %I:%M %p")
 
                 text = (
                     f"⚠️ <b>সাবস্ক্রিপশন মেয়াদ শেষের নোটিশ!</b>\n\n"

@@ -11,4 +11,4 @@ services:
       - ./vault_database.db:/app/vault_database.db
       - ./backups:/app/backups
     environment:
-      - TZ=UTC
+      - TZ=Asia/Dhaka

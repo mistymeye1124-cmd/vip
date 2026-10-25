@@ -4158,7 +4158,7 @@ async def global_error_handler(update: object, context: ContextTypes.DEFAULT_TYP
 async def post_init(application: Application):
     """Starts the 24/7 background scheduler and registers Telegram Menu commands."""
     scheduler = VaultScheduler(bot=application.bot, config=CONFIG)
-    application.create_task(scheduler.start())
+    asyncio.create_task(scheduler.start())
     logger.info("Background Auto-Kick Scheduler task created successfully.")
 
     # Register official bot commands for the bottom-left Menu button

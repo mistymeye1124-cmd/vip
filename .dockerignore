@@ -1,0 +1,13 @@
+.git
+.github
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+*.log
+.env
+.env.*
+vault_database.db*
+backups/
+scratch/
+.pytest_cache
