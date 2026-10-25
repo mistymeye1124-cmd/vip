@@ -229,6 +229,60 @@ CONFIG["force_channel_name"] = FORCE_CHANNEL_NAME
 USER_STATES: Dict[int, Dict[str, Any]] = {}
 
 
+def get_dollar_rate() -> float:
+    """Returns the current exchange rate (BDT per 1 USD) from SQLite settings."""
+    try:
+        val = db.get_setting("usdt_rate_bdt", "125")
+        rate = float(val) if val else 125.0
+        return rate if rate > 0 else 125.0
+    except Exception:
+        return 125.0
+
+
+def set_dollar_rate(rate: float):
+    """Saves the exchange rate to SQLite settings and updates plans in memory & DB."""
+    if rate <= 0:
+        rate = 125.0
+    db.set_setting("usdt_rate_bdt", str(rate))
+    for pk, pv in PLANS.items():
+        pv["price_usdt"] = calc_usd(pv.get("price_bdt", 0), rate)
+        try:
+            db.update_plan_price(pk, pv["price_bdt"], pv["price_usdt"])
+        except Exception:
+            pass
+
+
+def calc_usd(bdt_amount: float, rate: Optional[float] = None) -> Any:
+    """Dynamically converts BDT to USD based on current exchange rate."""
+    r = rate if rate is not None else get_dollar_rate()
+    if r <= 0:
+        r = 125.0
+    val = round(bdt_amount / r, 2)
+    return int(val) if val.is_integer() else val
+
+
+def format_price(bdt_amount: float, usd_amount: Optional[float] = None) -> str:
+    """Formats full price displaying both BDT and USD: '750 BDT / $6 USDT'"""
+    usd = usd_amount if usd_amount is not None else calc_usd(bdt_amount)
+    usd_str = f"${int(usd)}" if isinstance(usd, int) or (isinstance(usd, float) and usd.is_integer()) else f"${usd:.2f}"
+    return f"{int(bdt_amount):,} BDT / {usd_str} USDT"
+
+
+def format_btn_price(bdt_amount: float, usd_amount: Optional[float] = None) -> str:
+    """Short format for buttons: '750 BDT / $6'"""
+    usd = usd_amount if usd_amount is not None else calc_usd(bdt_amount)
+    usd_str = f"${int(usd)}" if isinstance(usd, int) or (isinstance(usd, float) and usd.is_integer()) else f"${usd:.2f}"
+    return f"{int(bdt_amount):,} BDT / {usd_str}"
+
+
+# Initial synchronization of plan USDT prices according to stored dollar rate
+try:
+    for pk, pv in PLANS.items():
+        pv["price_usdt"] = calc_usd(pv.get("price_bdt", 0))
+except Exception:
+    pass
+
+
 def save_config():
     """Persists channels, plans, and payment settings to both SQLite DB and config.json so they are NEVER lost."""
     global CHANNELS, PLANS, PAYMENT_INFO, FORCE_CHANNEL_ID, FORCE_CHANNEL_LINK, FORCE_CHANNEL_NAME, VIP_PREVIEW_LINK, VIP_PREVIEW_NAME
@@ -833,9 +887,13 @@ async def render_plans_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     em_ord = em_tag("orders", "📦")
     box_border = "━━━━━━━━━━━━━━━━━━━━"
 
-    p_mon = PLANS.get("monthly", {"price_bdt": 1000, "price_usdt": 10})
-    p_yr = PLANS.get("yearly", {"price_bdt": 5000, "price_usdt": 50})
-    p_life = PLANS.get("lifetime", {"price_bdt": 8000, "price_usdt": 80})
+    p_mon = PLANS.get("monthly", {"price_bdt": 1000})
+    p_yr = PLANS.get("yearly", {"price_bdt": 5000})
+    p_life = PLANS.get("lifetime", {"price_bdt": 8000})
+
+    mon_bdt = p_mon.get("price_bdt", 1000)
+    yr_bdt = p_yr.get("price_bdt", 5000)
+    life_bdt = p_life.get("price_bdt", 8000)
 
     preview_text = ""
     if VIP_PREVIEW_LINK:
@@ -850,13 +908,13 @@ async def render_plans_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"আপনার পছন্দের প্রিমিয়াম প্ল্যানটি বেছে নিন:\n\n"
         f"<b>১. 📅 Monthly VIP (30 Days)</b>\n"
         f"• ফুল কোর্স ভল্ট ও ডিসকাশন গ্রুপ এক্সেস\n"
-        f"• ইনভেস্টমেন্ট: <b>{p_mon.get('price_bdt', 1000)} BDT / ${p_mon.get('price_usdt', 10)} USDT</b>\n\n"
+        f"• ইনভেস্টমেন্ট: <b>{format_price(mon_bdt)}</b>\n\n"
         f"<b>২. 📆 Yearly VIP (365 Days)</b>\n"
         f"• ৩৬৫ দিন নিরবচ্ছিন্ন আপডেট ও প্রায় ৬০% সেভিংস {em_fire}\n"
-        f"• ইনভেস্টমেন্ট: <b>{p_yr.get('price_bdt', 5000)} BDT / ${p_yr.get('price_usdt', 50)} USDT</b>\n\n"
+        f"• ইনভেস্টমেন্ট: <b>{format_price(yr_bdt)}</b>\n\n"
         f"<b>৩. 👑 Lifetime Access (Forever VIP)</b>\n"
         f"• একবার পেমেন্টে আজীবনের জন্য ফুল ফ্রি এক্সেস {em_zap}\n"
-        f"• ইনভেস্টমেন্ট: <b>{p_life.get('price_bdt', 8000)} BDT / ${p_life.get('price_usdt', 80)} USDT</b>\n"
+        f"• ইনভেস্টমেন্ট: <b>{format_price(life_bdt)}</b>\n"
         f"{box_border}"
         f"{preview_text}\n\n"
         f"👉 <i>যে প্ল্যানটি নিতে চান নিচের বাটনে ট্যাপ করুন:</i>"
@@ -867,9 +925,9 @@ async def render_plans_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard.append([InlineKeyboardButton("👁️ View VIP Preview Channel 🎬", url=VIP_PREVIEW_LINK)])
 
     keyboard.extend([
-        [InlineKeyboardButton(f"📅 Buy Monthly ({p_mon.get('price_bdt', 1000)} BDT)", callback_data="buy_monthly")],
-        [InlineKeyboardButton(f"📆 Buy Yearly ({p_yr.get('price_bdt', 5000)} BDT)", callback_data="buy_yearly")],
-        [InlineKeyboardButton(f"👑 Buy Lifetime ({p_life.get('price_bdt', 8000)} BDT)", callback_data="buy_lifetime")],
+        [InlineKeyboardButton(f"📅 Buy Monthly ({format_btn_price(mon_bdt)})", callback_data="buy_monthly")],
+        [InlineKeyboardButton(f"📆 Buy Yearly ({format_btn_price(yr_bdt)})", callback_data="buy_yearly")],
+        [InlineKeyboardButton(f"👑 Buy Lifetime ({format_btn_price(life_bdt)})", callback_data="buy_lifetime")],
         [InlineKeyboardButton("🔙 Back to Main Menu", callback_data="main_menu")],
     ])
 
@@ -952,7 +1010,7 @@ async def handle_buy_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, pl
     text = (
         f"{em_tag('wallet', '💳')} <b>পেমেন্ট ইনস্ট্রাকশন: {plan['name']}</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"{em_tag('cash', '💰')} <b>প্রদেয় মূল্য:</b> <b>{plan['price_bdt']} BDT</b> অথবা <b>${plan['price_usdt']} USDT</b>\n\n"
+        f"{em_tag('cash', '💰')} <b>প্রদেয় মূল্য:</b> <b>{format_price(plan['price_bdt'])}</b>\n\n"
         f"{em_tag('bkash', '📱')} <b>bKash (Agent - Cash Out Only):</b>\n"
         f"👉 <code>{bkash_num}</code>\n"
         f"<i>(নম্বরে ট্যাপ করলেই কপি হয়ে যাবে)</i>\n\n"
@@ -1080,11 +1138,12 @@ async def handle_user_text_message(update: Update, context: ContextTypes.DEFAULT
         if is_wholesale:
             ws_discount = float(db.get_setting("affiliate_wholesale_discount_pct", "50"))
             ws_bdt = max(1, round(plan.get("price_bdt", 0) * ((100 - ws_discount) / 100.0)))
-            ws_usdt = max(1, round(plan.get("price_usdt", 0) * ((100 - ws_discount) / 100.0)))
-            amount_display = f"{ws_bdt} BDT / ${ws_usdt} USDT (Wholesale {int(ws_discount)}% Off)"
+            ws_usdt = calc_usd(ws_bdt)
+            amount_display = f"{format_price(ws_bdt, ws_usdt)} (Wholesale {int(ws_discount)}% Off)"
             plan_display_name = f"{plan.get('name')} (Wholesale)"
         else:
-            amount_display = f"{plan.get('price_bdt')} BDT / ${plan.get('price_usdt', 'N/A')} USDT"
+            plan_bdt = plan.get('price_bdt', 0)
+            amount_display = format_price(plan_bdt)
             plan_display_name = plan.get("name")
 
         # Create record in DB
@@ -1473,7 +1532,7 @@ async def handle_user_text_message(update: Update, context: ContextTypes.DEFAULT
 
         try:
             bdt = int(nums[0])
-            usdt = int(nums[1]) if len(nums) > 1 else max(1, round(bdt / 100))
+            usdt = int(nums[1]) if len(nums) > 1 else calc_usd(bdt)
 
             PLANS[plan_key]["price_bdt"] = bdt
             PLANS[plan_key]["price_usdt"] = usdt
@@ -1490,13 +1549,45 @@ async def handle_user_text_message(update: Update, context: ContextTypes.DEFAULT
 
             await update.message.reply_text(
                 f"✅ <b>{PLANS[plan_key]['name']} এর মূল্য সফলভাবে আপডেট হয়েছে!</b>\n\n"
-                f"💰 <b>নতুন প্রদেয় মূল্য:</b> <b>{bdt} BDT</b> / <b>${usdt} USDT</b>\n"
+                f"💰 <b>নতুন প্রদেয় মূল্য:</b> <b>{format_price(bdt, usdt)}</b>\n"
                 f"💾 <i>ডাটাবেজ ও বটে পার্মানেন্টলি সেভ হয়ে গেছে!</i>",
                 parse_mode="HTML",
                 reply_markup=markup,
             )
         except Exception as e:
             await update.message.reply_text(f"❌ এরর: {e}")
+        return
+
+    # Admin Awaiting Dollar Exchange Rate Input
+    if action == "admin_awaiting_dollar_rate":
+        text_in = update.message.text.strip() if update.message.text else ""
+        nums = re.findall(r"\d+(?:\.\d+)?", text_in)
+        if not nums:
+            await update.message.reply_text("❌ অবৈধ রেট! সংখ্যা লিখে পাঠান (যেমন: 125 বা 130)।")
+            return
+
+        new_rate = float(nums[0])
+        USER_STATES.pop(user_id, None)
+        set_dollar_rate(new_rate)
+        db.log_activity(user_id, "DOLLAR_RATE_UPDATED", f"1 USD = {new_rate} BDT")
+
+        lines = [
+            f"✅ <b>ডলার রেট সফলভাবে আপডেট হয়েছে!</b>\n",
+            f"💵 <b>নতুন রেট:</b> <code>1 USD = {new_rate:g} BDT</code>\n",
+            f"━━━━━━━━━━━━━━━━━━━━\n",
+            f"স্বয়ংক্রিয়ভাবে পরিবর্তিত নতুন প্ল্যান মূল্যসমূহ:\n",
+        ]
+        for pk in ("monthly", "yearly", "lifetime"):
+            pv = PLANS.get(pk)
+            if pv:
+                lines.append(f"• <b>{pv['name']}:</b> <code>{format_price(pv['price_bdt'])}</code>")
+        lines.append("\n💾 <i>ডাটাবেজে পার্মানেন্টলি সেভ হয়েছে এবং সব ইউজার স্ক্রিনে লাইভ হয়ে গেছে!</i>")
+
+        markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("💰 Plan Pricing Control", callback_data="adm_action_edit_prices")],
+            [InlineKeyboardButton("⚙️ Admin Dashboard", callback_data="admin_dashboard")],
+        ])
+        await update.message.reply_text("\n".join(lines), parse_mode="HTML", reply_markup=markup)
         return
 
     # 11. Admin Awaiting Preview Link Input
@@ -2316,13 +2407,13 @@ async def cmd_setprice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lines = [
             "💰 <b>Usage:</b> <code>/setprice &lt;monthly|yearly|lifetime&gt; &lt;price_bdt&gt; [price_usdt]</code>\n",
             "<b>Examples:</b>",
-            "• <code>/setprice monthly 500 5</code>",
-            "• <code>/setprice yearly 3000 30</code>",
-            "• <code>/setprice lifetime 5000 50</code>\n",
+            "• <code>/setprice monthly 750</code> <i>(ডলার অটো ক্যালকুলেট হবে)</i>",
+            "• <code>/setprice yearly 5000</code>",
+            "• <code>/setprice lifetime 8000</code>\n",
             "<b>Current Active Pricing:</b>",
         ]
         for pk, pv in PLANS.items():
-            lines.append(f"• <b>{pv['name']}:</b> <code>{pv['price_bdt']} BDT / ${pv['price_usdt']} USDT</code>")
+            lines.append(f"• <b>{pv['name']}:</b> <code>{format_price(pv['price_bdt'])}</code>")
         await update.message.reply_text("\n".join(lines), parse_mode="HTML")
         return
 
@@ -2342,7 +2433,7 @@ async def cmd_setprice(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         bdt = int(nums[0])
-        usdt = int(nums[1]) if len(nums) > 1 else max(1, round(bdt / 100))
+        usdt = int(nums[1]) if len(nums) > 1 else calc_usd(bdt)
 
         PLANS[plan_key]["price_bdt"] = bdt
         PLANS[plan_key]["price_usdt"] = usdt
@@ -2353,12 +2444,57 @@ async def cmd_setprice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             f"✅ <b>Plan Pricing Updated!</b>\n\n"
             f"📦 <b>Plan:</b> {PLANS[plan_key]['name']}\n"
-            f"💰 <b>New Price:</b> <b>{bdt} BDT</b> / <b>${usdt} USDT</b>\n"
+            f"💰 <b>New Price:</b> <b>{format_price(bdt, usdt)}</b>\n"
             f"💾 <i>Saved permanently in SQLite DB & Config.</i>",
             parse_mode="HTML",
         )
     except Exception as e:
         await update.message.reply_text(f"❌ Error updating price: {e}")
+
+
+async def cmd_setdollar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Usage: /setdollar <rate> (e.g. /setdollar 125)"""
+    user_id = update.effective_user.id
+    if not is_admin(user_id):
+        return
+    args = context.args
+    if not args:
+        cur_rate = get_dollar_rate()
+        lines = [
+            f"💵 <b>CURRENT DOLLAR RATE & PRICING</b>\n",
+            f"• <b>রেট:</b> <code>1 USD = {cur_rate:g} BDT</code>\n",
+            "<b>বর্তমান প্ল্যান মূল্যসমূহ:</b>",
+        ]
+        for pk, pv in PLANS.items():
+            lines.append(f"• <b>{pv['name']}:</b> <code>{format_price(pv['price_bdt'])}</code>")
+        lines.append("\n👉 নতুন রেট সেট করতে লিখুন: <code>/setdollar 125</code>")
+        await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+        return
+
+    try:
+        nums = re.findall(r"\d+(?:\.\d+)?", args[0])
+        if not nums:
+            await update.message.reply_text("❌ অবৈধ রেট! সংখ্যা লিখুন (যেমন: 125 বা 130)।")
+            return
+
+        new_rate = float(nums[0])
+        set_dollar_rate(new_rate)
+        db.log_activity(user_id, "DOLLAR_RATE_UPDATED", f"1 USD = {new_rate} BDT")
+
+        lines = [
+            f"✅ <b>Dollar Rate Updated!</b>\n",
+            f"💵 <b>নতুন রেট:</b> <code>1 USD = {new_rate:g} BDT</code>\n",
+            f"━━━━━━━━━━━━━━━━━━━━\n",
+            f"স্বয়ংক্রিয়ভাবে পরিবর্তিত নতুন প্ল্যান মূল্যসমূহ:\n",
+        ]
+        for pk in ("monthly", "yearly", "lifetime"):
+            pv = PLANS.get(pk)
+            if pv:
+                lines.append(f"• <b>{pv['name']}:</b> <code>{format_price(pv['price_bdt'])}</code>")
+        lines.append("\n💾 <i>ডাটাবেজে পার্মানেন্টলি সেভ হয়েছে এবং সব ইউজার স্ক্রিনে লাইভ হয়ে গেছে!</i>")
+        await update.message.reply_text("\n".join(lines), parse_mode="HTML")
+    except Exception as e:
+        await update.message.reply_text(f"❌ এরর: {e}")
 
 
 async def cmd_setpreview(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3368,29 +3504,47 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     if data == "adm_action_edit_prices":
+        rate = get_dollar_rate()
         em_crw = em_tag("crown", "👑")
         em_dia = em_tag("diamond", "💎")
         box_border = "━━━━━━━━━━━━━━━━━━━━"
 
         lines = [
-            f"{em_dia} <b>MANAGE VIP PLAN PRICING</b> {em_crw}\n",
+            f"{em_dia} <b>MANAGE VIP PLAN PRICING & DOLLAR RATE</b> {em_crw}\n",
             f"{box_border}",
-            "যেকোনো প্ল্যানের মূল্য (BDT ও USDT) পরিবর্তন করতে নিচের বাটনে ট্যাপ করুন:\n"
+            f"💵 <b>Current Dollar Rate:</b> <code>1 USD = {rate:g} BDT</code>\n",
+            "যেকোনো প্ল্যানের মূল্য অথবা ডলার রেট পরিবর্তন করতে নিচের বাটনে ট্যাপ করুন:\n",
         ]
         for pk in ("monthly", "yearly", "lifetime"):
             pv = PLANS.get(pk)
             if pv:
-                lines.append(f"• <b>{pv['name']}:</b>\n  মূল্য: <b>{pv['price_bdt']} BDT</b> / <b>${pv['price_usdt']} USDT</b>\n")
+                lines.append(f"• <b>{pv['name']}:</b>\n  মূল্য: <b>{format_price(pv['price_bdt'])}</b>\n")
         lines.append(f"{box_border}")
-        lines.append("<i>বাটনে ক্লিক করার পর নতুন মূল্য লিখুন অথবা কমান্ড ব্যবহার করুন: <code>/setprice &lt;plan&gt; &lt;bdt&gt; [usdt]</code></i>")
+        lines.append("<i>বাটনে ক্লিক করার পর নতুন মান লিখুন অথবা কমান্ড ব্যবহার করুন: <code>/setdollar &lt;rate&gt;</code></i>")
 
         buttons = [
-            [InlineKeyboardButton(f"📅 Change Monthly ({PLANS.get('monthly', {}).get('price_bdt', 0)} BDT)", callback_data="adm_change_price_monthly")],
-            [InlineKeyboardButton(f"📆 Change Yearly ({PLANS.get('yearly', {}).get('price_bdt', 0)} BDT)", callback_data="adm_change_price_yearly")],
-            [InlineKeyboardButton(f"👑 Change Lifetime ({PLANS.get('lifetime', {}).get('price_bdt', 0)} BDT)", callback_data="adm_change_price_lifetime")],
+            [InlineKeyboardButton(f"💵 Set Dollar Rate (1 USD = {rate:g} BDT)", callback_data="adm_change_dollar_rate")],
+            [InlineKeyboardButton(f"📅 Change Monthly ({format_btn_price(PLANS.get('monthly', {}).get('price_bdt', 0))})", callback_data="adm_change_price_monthly")],
+            [InlineKeyboardButton(f"📆 Change Yearly ({format_btn_price(PLANS.get('yearly', {}).get('price_bdt', 0))})", callback_data="adm_change_price_yearly")],
+            [InlineKeyboardButton(f"👑 Change Lifetime ({format_btn_price(PLANS.get('lifetime', {}).get('price_bdt', 0))})", callback_data="adm_change_price_lifetime")],
             [InlineKeyboardButton("🔙 Back to Admin", callback_data="admin_dashboard")],
         ]
         await query.edit_message_text("\n".join(lines), parse_mode="HTML", reply_markup=InlineKeyboardMarkup(buttons))
+        return
+
+    if data == "adm_change_dollar_rate":
+        USER_STATES[user_id] = {"action": "admin_awaiting_dollar_rate"}
+        cur_rate = get_dollar_rate()
+        await query.edit_message_text(
+            f"💵 <b>SET DOLLAR EXCHANGE RATE (USDT/USD)</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"বর্তমান রেট: <b>1 USD = {cur_rate:g} BDT</b>\n\n"
+            f"প্রতি ১ ডলারে কত টাকা হবে তা লিখে পাঠান (যেমন: <code>125</code> অথবা <code>130</code>):\n\n"
+            f"<i>💡 রেট সেট করার সাথে সাথে সবকয়টি প্ল্যানের ডলারের দাম স্বয়ংক্রিয়ভাবে রিয়েল-টাইমে আপডেট হয়ে যাবে!</i>\n\n"
+            f"<i>(বাতিল করতে চাইলে /cancel লিখুন)</i>",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Cancel / Back", callback_data="adm_action_edit_prices")]]),
+        )
         return
 
     if data.startswith("adm_change_price_"):
@@ -3399,11 +3553,12 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             USER_STATES[user_id] = {"action": "admin_awaiting_plan_price", "plan_key": plan_key}
             await query.edit_message_text(
                 f"💰 <b>Set Price for {PLANS[plan_key]['name']}</b>\n\n"
-                f"বর্তমান মূল্য: <b>{PLANS[plan_key]['price_bdt']} BDT / ${PLANS[plan_key]['price_usdt']} USDT</b>\n\n"
-                f"নতুন <b>BDT প্রাইস</b> এবং স্পেস দিয়ে <b>USDT প্রাইস</b> লিখে পাঠান।\n"
-                f"উদাহরণ: <code>500 5</code> (অথবা শুধু <code>500</code> লিখলে USDT অটো ক্যালকুলেট হবে)\n\n"
+                f"বর্তমান মূল্য: <b>{format_price(PLANS[plan_key]['price_bdt'])}</b>\n\n"
+                f"নতুন <b>BDT প্রাইস</b> লিখে মেসেজ পাঠান (যেমন: <code>750</code>)।\n"
+                f"<i>(ডলার রেট অনুযায়ী USDT এর মূল্য স্বয়ংক্রিয়ভাবে ক্যালকুলেট হয়ে যাবে)</i>\n\n"
                 f"<i>(বাতিল করতে চাইলে /cancel লিখুন)</i>",
                 parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Cancel / Back", callback_data="adm_action_edit_prices")]]),
             )
         return
 
@@ -3769,10 +3924,11 @@ async def render_wholesale_plans(query: Any, user_id: int):
 
     keyboard = []
     for pk, pv in PLANS.items():
-        ws_bdt = max(1, round(pv["price_bdt"] * ((100 - ws_discount) / 100.0)))
-        ws_usdt = max(1, round(pv["price_usdt"] * ((100 - ws_discount) / 100.0)))
-        text += f"• <b>{pv['name']}:</b> <code>{ws_bdt} BDT / ${ws_usdt} USDT</code> <i>(রেগুলার {pv['price_bdt']} BDT)</i>\n"
-        keyboard.append([InlineKeyboardButton(f"🛒 Buy {pv['name']} ({ws_bdt} BDT)", callback_data=f"ws_buy_{pk}")])
+        orig_bdt = pv["price_bdt"]
+        ws_bdt = max(1, round(orig_bdt * ((100 - ws_discount) / 100.0)))
+        ws_usdt = calc_usd(ws_bdt)
+        text += f"• <b>{pv['name']}:</b> <code>{format_price(ws_bdt, ws_usdt)}</code> <i>(রেগুলার {format_price(orig_bdt)})</i>\n"
+        keyboard.append([InlineKeyboardButton(f"🛒 Buy {pv['name']} ({format_btn_price(ws_bdt, ws_usdt)})", callback_data=f"ws_buy_{pk}")])
 
     keyboard.append([InlineKeyboardButton("🔙 Back to Affiliate Hub", callback_data="affiliate_menu")])
     await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
@@ -3794,7 +3950,7 @@ async def handle_buy_wholesale(update: Update, context: ContextTypes.DEFAULT_TYP
     plan = PLANS[plan_key]
     ws_discount = float(db.get_setting("affiliate_wholesale_discount_pct", "50"))
     ws_bdt = max(1, round(plan["price_bdt"] * ((100 - ws_discount) / 100.0)))
-    ws_usdt = max(1, round(plan["price_usdt"] * ((100 - ws_discount) / 100.0)))
+    ws_usdt = calc_usd(ws_bdt)
 
     bkash = PAYMENT_INFO.get("bkash", "01718539406")
     nagad = PAYMENT_INFO.get("nagad", "01718539406")
@@ -3810,7 +3966,7 @@ async def handle_buy_wholesale(update: Update, context: ContextTypes.DEFAULT_TYP
         f"🛒 <b>WHOLESALE ORDER CHECKOUT — ক্লায়েন্ট লিংক পারচেজ</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"📦 <b>প্ল্যান:</b> <b>{plan['name']}</b>\n"
-        f"💰 <b>পাইকারি প্রদেয় মূল্য ({int(ws_discount)}% Off):</b> <b>{ws_bdt} BDT / ${ws_usdt} USDT</b>\n"
+        f"💰 <b>পাইকারি প্রদেয় মূল্য ({int(ws_discount)}% Off):</b> <b>{format_price(ws_bdt, ws_usdt)}</b>\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"📲 <b>পেমেন্ট অ্যাকাউন্টসমূহ:</b>\n"
         f"• 🔴 <b>bKash (Agent Cashout):</b> <code>{bkash}</code>\n"
@@ -4174,6 +4330,35 @@ async def post_init(application: Application):
     except Exception as e:
         logger.warning(f"Failed to register bot commands: {e}")
 
+    # Dispatch startup/deployment safety database snapshot to Admins
+    try:
+        backup_file = db.backup_database()
+        dhaka_now = datetime.datetime.now().strftime("%d %b %Y, %I:%M:%S %p")
+        sub_count = len(db.get_active_subscribers())
+        total_users = len(db.get_all_users())
+        for aid in ADMIN_IDS:
+            try:
+                with open(backup_file, "rb") as bf:
+                    await application.bot.send_document(
+                        chat_id=aid,
+                        document=bf,
+                        filename=os.path.basename(backup_file),
+                        caption=(
+                            "🛡️ <b>[BOT UPDATE / STARTUP SAFETY BACKUP]</b>\n"
+                            "━━━━━━━━━━━━━━━━━━━━\n"
+                            f"📅 <b>Time:</b> <code>{dhaka_now}</code>\n"
+                            f"👥 <b>Total Users:</b> <code>{total_users}</code> | <b>Active VIPs:</b> <code>{sub_count}</code>\n"
+                            "✅ <b>Status:</b> Bot is online & running live!\n"
+                            "💾 <i>Automatic snapshot dispatched for 100% data security.</i>"
+                        ),
+                        parse_mode="HTML",
+                    )
+                logger.info(f"Startup safety backup dispatched to Admin ID {aid}")
+            except Exception as se:
+                logger.warning(f"Could not dispatch startup backup to admin {aid}: {se}")
+    except Exception as e:
+        logger.error(f"Startup safety backup failed: {e}")
+
 
 def main():
     if not BOT_TOKEN or BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
@@ -4237,6 +4422,8 @@ def main():
     app.add_handler(CommandHandler("channels", cmd_channels))
     app.add_handler(CommandHandler("setpayment", cmd_setpayment))
     app.add_handler(CommandHandler("setprice", cmd_setprice))
+    app.add_handler(CommandHandler("setdollar", cmd_setdollar))
+    app.add_handler(CommandHandler("setrate", cmd_setdollar))
     app.add_handler(CommandHandler("setforcechannel", cmd_setforcechannel))
     app.add_handler(CommandHandler("setpreview", cmd_setpreview))
 
