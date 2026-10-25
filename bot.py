@@ -4334,8 +4334,9 @@ async def post_init(application: Application):
     try:
         backup_file = db.backup_database()
         dhaka_now = datetime.datetime.now().strftime("%d %b %Y, %I:%M:%S %p")
-        sub_count = len(db.get_active_subscribers())
-        total_users = len(db.get_all_users())
+        stats = db.get_stats()
+        sub_count = stats.get("total_active", 0)
+        total_users = stats.get("total_all", 0)
         for aid in ADMIN_IDS:
             try:
                 with open(backup_file, "rb") as bf:

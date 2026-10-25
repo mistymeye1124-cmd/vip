@@ -49,8 +49,9 @@ async def dispatch_backup(tag: str = "PRE-UPDATE SAFETY BACKUP"):
     now_str = datetime.datetime.now().strftime("%d %b %Y, %I:%M:%S %p")
     filename = os.path.basename(backup_path)
 
-    active_subs = len(db.get_active_subscribers())
-    all_users = len(db.get_all_users())
+    stats = db.get_stats()
+    active_subs = stats.get("total_active", 0)
+    all_users = stats.get("total_all", 0)
 
     caption = (
         f"🛡️ <b>[{tag.upper()}]</b>\n"
