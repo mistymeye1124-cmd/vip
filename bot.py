@@ -33,6 +33,7 @@ if sys.platform == "win32":
 
 from telegram import (
     Update,
+    Bot,
     InlineKeyboardMarkup,
     InlineKeyboardButton,
     ReplyKeyboardMarkup,
