@@ -176,12 +176,29 @@ class Database:
                 );
             """)
 
+            # 10. Reseller Applications Table
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS reseller_applications (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    username TEXT,
+                    full_name TEXT,
+                    marketing_plan TEXT NOT NULL,
+                    status TEXT DEFAULT 'pending',
+                    created_at TEXT NOT NULL,
+                    reviewed_at TEXT,
+                    reviewed_by INTEGER
+                );
+            """)
+
             # Indexes for fast queries
             conn.execute("CREATE INDEX IF NOT EXISTS idx_subs_status ON subscribers(status);")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_subs_expires ON subscribers(expires_at);")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_pay_status ON payment_requests(status);")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_aff_referrer ON affiliates(referrer_id);")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_aff_payout_status ON affiliate_payouts(status);")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_res_app_user ON reseller_applications(user_id);")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_res_app_status ON reseller_applications(status);")
             conn.commit()
 
             # Seed default affiliate settings if not present
@@ -1160,6 +1177,128 @@ class Database:
                 "total_paid_bdt": total_paid,
                 "pending_payouts": pending_count,
             }
+
+    # -------------------------------------------------------------------------
+    # RESELLER APPLICATION METHODS
+    # -------------------------------------------------------------------------
+    def create_reseller_application(
+        self,
+        user_id: int,
+        username: Optional[str],
+        full_name: Optional[str],
+        marketing_plan: str,
+    ) -> int:
+        """Records a new verified reseller application."""
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        with self._get_connection() as conn:
+            cur = conn.execute(
+                """
+                INSERT INTO reseller_applications (user_id, username, full_name, marketing_plan, status, created_at)
+                VALUES (?, ?, ?, ?, 'pending', ?);
+                """,
+                (user_id, username, full_name, marketing_plan, now),
+            )
+            app_id = cur.lastrowid
+            conn.commit()
+
+        self.log_activity(
+            user_id,
+            "RESELLER_APPLIED",
+            f"Submitted reseller application #{app_id}",
+        )
+        return app_id
+
+    def get_pending_reseller_app(self, user_id: int) -> Optional[Dict[str, Any]]:
+        """Returns the active pending application for user if one exists."""
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM reseller_applications WHERE user_id = ? AND status = 'pending' ORDER BY id DESC LIMIT 1;",
+                (user_id,),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def get_reseller_application(self, app_id: int) -> Optional[Dict[str, Any]]:
+        """Returns application by id."""
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM reseller_applications WHERE id = ?;", (app_id,)
+            ).fetchone()
+            return dict(row) if row else None
+
+    def approve_reseller_application(
+        self, app_id: int, admin_id: int
+    ) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
+        """Approves a reseller application and upgrades user to verified reseller."""
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM reseller_applications WHERE id = ?;", (app_id,)
+            ).fetchone()
+            if not row or row["status"] != "pending":
+                return (False, "আবেদনটি পাওয়া যায়নি অথবা ইতিপূর্বে প্রসেস করা হয়েছে।", None)
+
+            app_data = dict(row)
+            now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+            conn.execute(
+                """
+                UPDATE reseller_applications
+                SET status = 'approved', reviewed_at = ?, reviewed_by = ?
+                WHERE id = ?;
+                """,
+                (now, admin_id, app_id),
+            )
+            # Upgrade user role in affiliates
+            conn.execute(
+                "UPDATE affiliates SET role = 'reseller' WHERE user_id = ?;",
+                (app_data["user_id"],),
+            )
+            conn.commit()
+
+        self.log_activity(
+            app_data["user_id"],
+            "RESELLER_APP_APPROVED",
+            f"Reseller application #{app_id} approved by admin {admin_id}",
+        )
+        return (True, "রিসেলার আবেদন সফলভাবে অনুমোদন করা হয়েছে।", app_data)
+
+    def reject_reseller_application(
+        self, app_id: int, admin_id: int, reason: Optional[str] = None
+    ) -> Tuple[bool, str, Optional[Dict[str, Any]]]:
+        """Rejects a reseller application."""
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM reseller_applications WHERE id = ?;", (app_id,)
+            ).fetchone()
+            if not row or row["status"] != "pending":
+                return (False, "আবেদনটি পাওয়া যায়নি অথবা ইতিপূর্বে প্রসেস করা হয়েছে।", None)
+
+            app_data = dict(row)
+            now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+            conn.execute(
+                """
+                UPDATE reseller_applications
+                SET status = 'rejected', reviewed_at = ?, reviewed_by = ?
+                WHERE id = ?;
+                """,
+                (now, admin_id, app_id),
+            )
+            conn.commit()
+
+        self.log_activity(
+            app_data["user_id"],
+            "RESELLER_APP_REJECTED",
+            f"Reseller application #{app_id} rejected by admin {admin_id}. Reason: {reason or 'N/A'}",
+        )
+        return (True, "রিসেলার আবেদন বাতিল করা হয়েছে।", app_data)
+
+    def get_all_pending_reseller_apps(self) -> List[Dict[str, Any]]:
+        """Returns all pending reseller applications."""
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM reseller_applications WHERE status = 'pending' ORDER BY id ASC;"
+            ).fetchall()
+            return [dict(r) for r in rows]
 
 
 # Global shared instance

@@ -1619,6 +1619,69 @@ async def handle_user_text_message(update: Update, context: ContextTypes.DEFAULT
                 logger.error(f"Failed to alert admin {adm_id} about payout #{payout_id}: {e}")
         return
 
+    # User Submitting Reseller Application (Marketing Plan & Channels)
+    if action == "aff_awaiting_reseller_app":
+        text_in = update.message.text.strip() if update.message.text else ""
+        if len(text_in) < 15:
+            await update.message.reply_text(
+                "⚠️ <b>অনুগ্রহ করে বিস্তারিত তথ্য প্রদান করুন!</b>\n"
+                "আপনার মার্কেটিং কৌশল এবং চ্যানেল/গ্রুপ লিঙ্কসহ কমপক্ষে কয়েকটি লাইনে বিস্তারিত লিখে পাঠান।\n\n"
+                "<i>(বাতিল করতে চাইলে /cancel লিখুন)</i>",
+                parse_mode="HTML",
+            )
+            return
+
+        USER_STATES.pop(user_id, None)
+        app_id = db.create_reseller_application(
+            user_id=user_id,
+            username=user.username,
+            full_name=user.full_name,
+            marketing_plan=text_in,
+        )
+
+        safe_plan = html.escape(text_in)
+        await update.message.reply_text(
+            f"✅ <b>আপনার ভেরিফাইড রিসেলার আবেদন সফলভাবে জমা হয়েছে! (ID: #{app_id})</b>\n\n"
+            f"📋 <b>জমা দেওয়া মার্কেটিং বিবরণ ও লিঙ্ক:</b>\n"
+            f"<blockquote>{safe_plan}</blockquote>\n\n"
+            f"⏳ <i>আমাদের অ্যাডমিন টিম আপনার ট্রাফিক সোর্স ও প্ল্যান যাচাই করে দ্রুত অনুমোদন প্রদান করবেন। সিদ্ধান্ত জানা মাত্রই আপনার ইনবক্সে নোটিফিকেশন চলে আসবে।</i>",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🤝 Back to Affiliate Hub", callback_data="affiliate_menu")]]),
+        )
+
+        safe_name = html.escape(user.full_name or "Applicant")
+        safe_uname = f"@{user.username}" if user.username else "No @"
+        admin_card = (
+            f"📝 <b>NEW VERIFIED RESELLER APPLICATION (#{app_id})</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"👤 <b>আবেদনকারী:</b> {safe_name} ({safe_uname})\n"
+            f"🆔 <b>User ID:</b> <code>{user_id}</code>\n"
+            f"📅 <b>তারিখ:</b> <code>{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>\n\n"
+            f"🎯 <b>মার্কেটিং স্ট্র্যাটেজি ও চ্যানেল লিঙ্ক:</b>\n"
+            f"<blockquote>{safe_plan}</blockquote>\n\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"👇 <i>রিভিউ করে সিদ্ধান্ত নিন:</i>"
+        )
+        markup = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("✅ Approve Reseller", callback_data=f"res_app_ok_{app_id}"),
+                InlineKeyboardButton("❌ Reject", callback_data=f"res_app_no_{app_id}"),
+            ]
+        ])
+
+        for adm_id in ADMIN_IDS:
+            try:
+                await context.bot.send_message(
+                    chat_id=adm_id,
+                    text=admin_card,
+                    parse_mode="HTML",
+                    reply_markup=markup,
+                    disable_web_page_preview=True,
+                )
+            except Exception as e:
+                logger.error(f"Failed to alert admin {adm_id} about reseller app #{app_id}: {e}")
+        return
+
     # 13. Admin Editing Affiliate Settings
     if action == "admin_awaiting_aff_setting":
         text_in = update.message.text.strip()
@@ -2554,6 +2617,15 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         await handle_buy_wholesale(update, context, plan_key)
         return
 
+    if data == "aff_apply_reseller":
+        await safe_ack()
+        await handle_reseller_apply_init(update, context)
+        return
+
+    if data == "aff_app_pending":
+        await safe_ack("⏳ আপনার আবেদনটি রিভিউ করা হচ্ছে! অ্যাডমিন যাচাই করার পর স্বয়ংক্রিয়ভাবে নোটিফিকেশন পাবেন।", show_alert=True)
+        return
+
     if data == "aff_payout_req":
         await safe_ack()
         await handle_payout_request_init(update, context)
@@ -3415,6 +3487,94 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                     pass
             else:
                 await safe_ack(f"❌ {msg}", show_alert=True)
+    if data == "adm_aff_apps":
+        if is_admin(user_id):
+            await safe_ack()
+            await render_admin_pending_reseller_apps(query)
+        return
+
+    if data.startswith("res_app_ok_"):
+        if is_admin(user_id):
+            await safe_ack("Approving application...")
+            app_id = int(data.replace("res_app_ok_", ""))
+            ok, msg, app_data = db.approve_reseller_application(app_id, admin_id=user_id)
+            if ok and app_data:
+                congrats_text = (
+                    f"🎉 <b>অভিনন্দন! আপনার Verified Reseller আবেদন অনুমোদিত হয়েছে!</b>\n\n"
+                    f"💼 <b>আবেদন আইডি:</b> <code>#{app_id}</code>\n"
+                    f"🎖️ <b>নতুন স্ট্যাটাস:</b> <b>Level 2: Verified Reseller</b> 🟢\n\n"
+                    f"🚀 <b>আপনার জন্য নতুন সুবিধা:</b>\n"
+                    f"• এখন থেকে পাইকারি (৫০% ছাড়) রেটে ক্লায়েন্টের জন্য ইনস্ট্যান্ট ১-টাইম VIP লিঙ্ক কিনতে পারবেন\n"
+                    f"• ক্লায়েন্টের কাছ থেকে পুরো টাকা নিয়ে বাকি অংশ আপনার নিজের লাভ হিসেবে থাকবে\n"
+                    f"• রেফারেল ক্যাশ পে-আউট সরাসরি bKash/Nagad/Binance এ তুলতে পারবেন\n\n"
+                    f"👇 নিচের বাটনে চাপ দিয়ে এখনই পোর্টাল দেখুন:"
+                )
+                congrats_markup = InlineKeyboardMarkup([[InlineKeyboardButton("🤝 Open Reseller Hub", callback_data="affiliate_menu")]])
+                try:
+                    await context.bot.send_message(
+                        chat_id=app_data["user_id"],
+                        text=congrats_text,
+                        parse_mode="HTML",
+                        reply_markup=congrats_markup,
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to DM approved reseller {app_data['user_id']}: {e}")
+
+                safe_admin_name = html.escape(str(query.from_user.username or user_id))
+                safe_user_uname = html.escape(str(app_data.get("username") or "none"))
+                safe_plan = html.escape(str(app_data.get("marketing_plan") or ""))
+                updated_text = (
+                    f"✅ <b>VERIFIED RESELLER APPLICATION APPROVED (#{app_id})</b>\n\n"
+                    f"👤 <b>Applicant:</b> <code>{app_data['user_id']}</code> (@{safe_user_uname})\n"
+                    f"🎖️ <b>Status:</b> Upgraded to <b>Verified Reseller</b>\n"
+                    f"👮 <b>Approved by:</b> @{safe_admin_name}\n\n"
+                    f"📝 <b>Submitted Marketing Details:</b>\n"
+                    f"<blockquote>{safe_plan}</blockquote>"
+                )
+                try:
+                    await query.edit_message_text(updated_text, parse_mode="HTML")
+                except Exception:
+                    pass
+            else:
+                await safe_ack(f"❌ {msg}", show_alert=True)
+        return
+
+    if data.startswith("res_app_no_"):
+        if is_admin(user_id):
+            await safe_ack("Rejecting application...")
+            app_id = int(data.replace("res_app_no_", ""))
+            ok, msg, app_data = db.reject_reseller_application(app_id, admin_id=user_id, reason="Rejected by admin")
+            if ok and app_data:
+                rej_text = (
+                    f"ℹ️ <b>ভেরিফাইড রিসেলার আবেদন সংক্রান্ত তথ্য (#{app_id})</b>\n\n"
+                    f"আপনার রিসেলার আবেদনটি এই মুহূর্তে গৃহীত হয়নি।\n"
+                    f"আপনার চ্যানেল/গ্রুপ লিঙ্ক ও মার্কেটিং পরিকল্পনা আরো বিস্তারিতভাবে উল্লেখ করে পরবর্তীতে পুনরায় আবেদন করতে পারেন অথবা ২টি সফল রেফারেল সেল সম্পন্ন করে স্বয়ংক্রিয়ভাবে রিসেলার হতে পারেন।"
+                )
+                try:
+                    await context.bot.send_message(
+                        chat_id=app_data["user_id"],
+                        text=rej_text,
+                        parse_mode="HTML",
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to DM rejected applicant {app_data['user_id']}: {e}")
+
+                safe_admin_name = html.escape(str(query.from_user.username or user_id))
+                safe_user_uname = html.escape(str(app_data.get("username") or "none"))
+                safe_plan = html.escape(str(app_data.get("marketing_plan") or ""))
+                updated_text = (
+                    f"❌ <b>RESELLER APPLICATION REJECTED (#{app_id})</b>\n\n"
+                    f"👤 <b>Applicant:</b> <code>{app_data['user_id']}</code> (@{safe_user_uname})\n"
+                    f"👮 <b>Rejected by:</b> @{safe_admin_name}\n\n"
+                    f"📝 <b>Submitted Marketing Details:</b>\n"
+                    f"<blockquote>{safe_plan}</blockquote>"
+                )
+                try:
+                    await query.edit_message_text(updated_text, parse_mode="HTML")
+                except Exception:
+                    pass
+            else:
+                await safe_ack(f"❌ {msg}", show_alert=True)
         return
 
     # Fallback acknowledge if no handler answered
@@ -3448,7 +3608,7 @@ async def render_affiliate_hub(update: Update, context: ContextTypes.DEFAULT_TYP
         tier_perk = f"• <i>প্রতিটি সফল পেইড রেফারেলে আপনার VIP অ্যাকাউন্টে <b>+{extend_days} দিন সম্পূর্ণ ফ্রি</b> যোগ হবে!</i>"
     else:
         badge = "⭐ <b>Level 1: Trainee Promoter</b>"
-        tier_perk = f"• <i>কমিশন ওয়ালেটে জমা হচ্ছে। উইথড্র আনলক করতে কমপক্ষে {min_unlock}টি সেল সম্পন্ন করুন।</i>"
+        tier_perk = f"• <i>কমিশন ওয়ালেটে জমা হচ্ছে। দ্রুত রিসেলার হতে <b>'Apply for Verified Reseller'</b> বাটনে আবেদন করুন অথবা {min_unlock}টি সেল সম্পন্ন করুন।</i>"
 
     sales = aff.get("total_sales", 0)
     filled_blocks = min(5, int((sales / max(1, min_unlock)) * 5))
@@ -3485,14 +3645,18 @@ async def render_affiliate_hub(update: Update, context: ContextTypes.DEFAULT_TYP
         f"<i>(লিংকের ওপর ট্যাপ করলেই কপি হয়ে যাবে। যেকোনো গ্রুপ বা সোশ্যাল মিডিয়ায় প্রমোট করুন)</i>\n"
     )
 
-    keyboard = [
-        [InlineKeyboardButton("💸 Request Payout", callback_data="aff_payout_req")],
-    ]
-
+    keyboard = []
     if is_reseller or is_admin(user_id):
-        keyboard.append([InlineKeyboardButton("🛒 Buy Wholesale for Client", callback_data="aff_wholesale_plans")])
+        keyboard.append([InlineKeyboardButton("🛒 Reseller Wholesale Portal (50% Off)", callback_data="aff_wholesale_plans")])
+        keyboard.append([InlineKeyboardButton("💸 Request Payout", callback_data="aff_payout_req")])
     else:
-        keyboard.append([InlineKeyboardButton("🛒 Buy Wholesale for Client (Locked 🔒)", callback_data="aff_wholesale_locked")])
+        pending_app = db.get_pending_reseller_app(user_id)
+        if pending_app:
+            keyboard.append([InlineKeyboardButton("⏳ Reseller Application Under Review", callback_data="aff_app_pending")])
+        else:
+            keyboard.append([InlineKeyboardButton("📝 Apply for Verified Reseller", callback_data="aff_apply_reseller")])
+        keyboard.append([InlineKeyboardButton("💸 Request Payout", callback_data="aff_payout_req")])
+        keyboard.append([InlineKeyboardButton("🛒 Buy Wholesale (Locked 🔒)", callback_data="aff_wholesale_locked")])
 
     keyboard.append([InlineKeyboardButton("📜 Rules & Progression Guide", callback_data="aff_rules_guide")])
     keyboard.append([InlineKeyboardButton("🔙 Back to Main Menu", callback_data="main_menu")])
@@ -3695,11 +3859,60 @@ async def handle_payout_method_selected(update: Update, context: ContextTypes.DE
     await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
 
 
+async def handle_reseller_apply_init(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Prompts the user with a structured questionnaire to apply for Verified Reseller status."""
+    query = update.callback_query
+    user_id = query.from_user.id
+
+    aff = db.get_or_create_affiliate(user_id)
+    if aff.get("role") == "reseller" or is_admin(user_id):
+        try:
+            await query.answer("✅ আপনি ইতিমধ্যে একজন ভেরিফাইড রিসেলার!", show_alert=True)
+        except Exception:
+            pass
+        await render_affiliate_hub(update, context)
+        return
+
+    pending_app = db.get_pending_reseller_app(user_id)
+    if pending_app:
+        try:
+            await query.answer("⏳ আপনার একটি আবেদন ইতিমধ্যে রিভিউতে রয়েছে! অনুগ্রহ করে অপেক্ষা করুন।", show_alert=True)
+        except Exception:
+            pass
+        return
+
+    try:
+        await query.answer()
+    except Exception:
+        pass
+
+    USER_STATES[user_id] = {"action": "aff_awaiting_reseller_app"}
+
+    text = (
+        f"📝 <b>VERIFIED RESELLER APPLICATION FORM</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"আমাদের এক্সক্লুসিভ <b>Verified Reseller</b> পার্টনারশিপ প্রোগ্রামে আবেদন করার জন্য নিচে উল্লেখিত তথ্যগুলো মেসেজে লিখে সেন্ড করুন:\n\n"
+        f"1️⃣ <b>মার্কেটিং স্ট্র্যাটেজি:</b>\n"
+        f"👉 আপনি কোর্সগুলো কীভাবে মার্কেটিং ও সেলস করবেন? (যেমন: সোশ্যাল মিডিয়া, ফ্রেন্ড সার্কেল, ফোরাম ইত্যাদি)\n\n"
+        f"2️⃣ <b>ট্রাফিক সোর্স / চ্যানেল লিঙ্ক:</b>\n"
+        f"👉 আপনার টেলিগ্রাম চ্যানেল, সাপোর্ট গ্রুপ বা ফেসবুক পেজের পাবলিক লিংক দিন।\n\n"
+        f"3️⃣ <b>পূর্ব অভিজ্ঞতা ও টার্গেট:</b>\n"
+        f"👉 আপনার কোনো পূর্ব কাজের অভিজ্ঞতা বা প্রতিদিন/প্রতি সপ্তাহে আনুমানিক কতগুলো সেল করতে পারবেন?\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"✍️ <i>সব তথ্য একসাথে সাজিয়ে সরাসরি একটি মেসেজে লিখে পাঠিয়ে দিন। অ্যাডমিন রিভিউ করে আপনার আবেদনটি অনুমোদন করবেন।</i>\n\n"
+        f"<i>(বাতিল করতে চাইলে /cancel লিখুন)</i>"
+    )
+
+    markup = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Cancel / Back", callback_data="affiliate_menu")]])
+    await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
+
+
 async def render_admin_affiliate_center(query: Any):
     """Renders the comprehensive Admin Affiliate & Reseller Management Center."""
     stats = db.get_affiliate_stats_summary()
     enabled = db.get_setting("affiliate_enabled", "1") == "1"
     status_icon = "🟢 ACTIVE / ON" if enabled else "🔴 DISABLED / OFF"
+    pending_apps = db.get_all_pending_reseller_apps()
 
     text = (
         f"🤝 <b>AFFILIATE & RESELLER CONTROL CENTER</b>\n"
@@ -3709,11 +3922,13 @@ async def render_admin_affiliate_center(query: Any):
         f"• 👥 <b>মোট নিবন্ধিত এফিলিয়েট:</b> <b>{stats['total_affiliates']}</b> জন\n"
         f"• 🎯 <b>মোট রেফারেল সেলস:</b> <b>{stats['total_sales']}</b> টি\n"
         f"• 💳 <b>মোট পরিশোধিত কমিশন:</b> <b>{stats['total_paid_bdt']:.2f} BDT</b>\n"
+        f"• 📝 <b>পেন্ডিং রিসেলার আবেদন:</b> <b>{len(pending_apps)}</b> টি\n"
         f"• ⏳ <b>পেন্ডিং উইথড্র রিকোয়েস্ট:</b> <b>{stats['pending_payouts']}</b> টি\n\n"
         f"👉 <i>নিচের অপশনগুলো ব্যবহার করে পেআউট ও কনফিগারেশন নিয়ন্ত্রণ করুন:</i>"
     )
 
     keyboard = [
+        [InlineKeyboardButton(f"📝 Reseller Applications ({len(pending_apps)})", callback_data="adm_aff_apps")],
         [InlineKeyboardButton(f"📋 Pending Payouts ({stats['pending_payouts']})", callback_data="adm_aff_payouts")],
         [InlineKeyboardButton("⚙️ Edit Affiliate Settings", callback_data="adm_aff_settings")],
         [InlineKeyboardButton("🔙 Back to Admin Dashboard", callback_data="admin_dashboard")],
@@ -3781,6 +3996,41 @@ async def render_admin_pending_payouts(query: Any):
         keyboard.append([
             InlineKeyboardButton(f"✅ Approve #{pid}", callback_data=f"aff_p_app_{pid}"),
             InlineKeyboardButton(f"❌ Reject #{pid}", callback_data=f"aff_p_rej_{pid}"),
+        ])
+
+    keyboard.append([InlineKeyboardButton("🔙 Back to Affiliate Center", callback_data="adm_aff_center")])
+    await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+async def render_admin_pending_reseller_apps(query: Any):
+    """Lists pending reseller applications with 1-click Approve / Reject buttons."""
+    apps = db.get_all_pending_reseller_apps()
+    if not apps:
+        text = (
+            "📝 <b>PENDING RESELLER APPLICATIONS</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "<i>বর্তমানে কোনো পেন্ডিং রিসেলার আবেদন নেই!</i>"
+        )
+        markup = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Affiliate Center", callback_data="adm_aff_center")]])
+        await query.edit_message_text(text, parse_mode="HTML", reply_markup=markup)
+        return
+
+    text = f"📝 <b>পেন্ডিং ভেরিফাইড রিসেলার আবেদনসমূহ ({len(apps)} টি):</b>\n\n"
+    keyboard = []
+    for app in apps[:6]:
+        aid = app["id"]
+        uid = app["user_id"]
+        safe_name = html.escape(str(app.get("full_name") or app.get("username") or uid))
+        safe_plan = html.escape(str(app.get("marketing_plan") or "N/A"))
+        if len(safe_plan) > 200:
+            safe_plan = safe_plan[:200] + "..."
+        text += (
+            f"• <b>App #{aid}:</b> <b>{safe_name}</b> (ID: <code>{uid}</code>)\n"
+            f"  📝 <b>প্ল্যান ও লিঙ্ক:</b> <blockquote>{safe_plan}</blockquote>\n"
+        )
+        keyboard.append([
+            InlineKeyboardButton(f"✅ Approve #{aid}", callback_data=f"res_app_ok_{aid}"),
+            InlineKeyboardButton(f"❌ Reject #{aid}", callback_data=f"res_app_no_{aid}"),
         ])
 
     keyboard.append([InlineKeyboardButton("🔙 Back to Affiliate Center", callback_data="adm_aff_center")])
