@@ -209,6 +209,8 @@ class Database:
                 "affiliate_min_sales_unlock": "2",
                 "affiliate_min_payout_bdt": "500",
                 "affiliate_wholesale_discount_pct": "50",
+                "reminder_stages": "24,12,1",
+                "vip_join_broadcast_enabled": "1",
             }
             now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
             for s_key, s_val in default_aff_settings.items():
@@ -216,6 +218,13 @@ class Database:
                     "INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES (?, ?, ?);",
                     (s_key, s_val, now_iso),
                 )
+
+            # Migration: Ensure reminder_stages_sent column exists
+            try:
+                conn.execute("ALTER TABLE subscribers ADD COLUMN reminder_stages_sent TEXT DEFAULT '';")
+            except Exception:
+                pass
+
             conn.commit()
 
         logger.info(f"Database initialized in WAL mode: {self.db_path}")
@@ -285,8 +294,8 @@ class Database:
                 """
                 INSERT INTO subscribers (
                     user_id, username, full_name, plan_key, plan_name,
-                    joined_at, expires_at, is_lifetime, reminder_sent, status, notes
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 'active', ?)
+                    joined_at, expires_at, is_lifetime, reminder_sent, reminder_stages_sent, status, notes
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, '', 'active', ?)
                 ON CONFLICT(user_id) DO UPDATE SET
                     username = excluded.username,
                     full_name = excluded.full_name,
@@ -295,6 +304,7 @@ class Database:
                     expires_at = excluded.expires_at,
                     is_lifetime = excluded.is_lifetime,
                     reminder_sent = 0,
+                    reminder_stages_sent = '',
                     status = 'active',
                     notes = COALESCE(excluded.notes, subscribers.notes);
                 """,
@@ -361,6 +371,7 @@ class Database:
                     expires_at = ?,
                     is_lifetime = ?,
                     reminder_sent = 0,
+                    reminder_stages_sent = '',
                     status = 'active'
                 WHERE user_id = ?;
                 """,
@@ -429,6 +440,61 @@ class Database:
             )
             conn.commit()
         self.log_activity(user_id, "REMINDER_SENT", "24h Expiry reminder delivered")
+
+    def get_due_stage_reminders(self, stages: Optional[List[int]] = None) -> List[Tuple[Dict[str, Any], int]]:
+        """
+        Evaluates active non-lifetime subscribers against configured reminder stages (e.g. [24, 12, 1]).
+        Returns a list of (subscriber_dict, stage_hours) tuples that need notification now.
+        """
+        if not stages:
+            stages = [24, 12, 1]
+        now = datetime.datetime.now(datetime.timezone.utc)
+        results = []
+
+        with self._get_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM subscribers
+                WHERE status = 'active'
+                  AND is_lifetime = 0
+                  AND expires_at > ?;
+                """,
+                (now.isoformat(),)
+            ).fetchall()
+
+            for r in rows:
+                sub = dict(r)
+                try:
+                    exp = datetime.datetime.fromisoformat(sub["expires_at"])
+                    diff_hours = (exp - now).total_seconds() / 3600.0
+                except Exception:
+                    continue
+
+                sent_str = sub.get("reminder_stages_sent") or ""
+                sent_stages = set([s.strip() for s in sent_str.split(",") if s.strip()])
+
+                # Check stages from smallest to largest
+                for stage in sorted(stages):
+                    if diff_hours <= stage and str(stage) not in sent_stages:
+                        results.append((sub, stage))
+                        break
+
+        return results
+
+    def mark_stage_reminder_sent(self, user_id: int, stage: int):
+        with self._get_connection() as conn:
+            row = conn.execute("SELECT reminder_stages_sent FROM subscribers WHERE user_id = ?;", (user_id,)).fetchone()
+            existing = (row["reminder_stages_sent"] or "").strip() if row and "reminder_stages_sent" in row.keys() else ""
+            stages = set([s.strip() for s in existing.split(",") if s.strip()])
+            stages.add(str(stage))
+            new_str = ",".join(sorted(stages, key=lambda x: int(x) if x.isdigit() else 0))
+
+            conn.execute(
+                "UPDATE subscribers SET reminder_stages_sent = ?, reminder_sent = 1 WHERE user_id = ?;",
+                (new_str, user_id),
+            )
+            conn.commit()
+        self.log_activity(user_id, "REMINDER_STAGE_SENT", f"{stage}h Expiry reminder delivered")
 
     def get_expired_subscribers(self) -> List[Dict[str, Any]]:
         """

@@ -669,6 +669,8 @@ async def render_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     status_text = "Active & Verified" if is_vip else "24/7 Instant Auto-Delivery"
     box_border = "━━━━━━━━━━━━━━━━━━━━"
 
+    preview_line = f"• 👁️ <b>Preview Channel:</b> <a href='{VIP_PREVIEW_LINK}'>ফ্রি কোর্স ডেমো ও প্রুফ দেখতে এখানে ক্লিক করুন</a>\n" if VIP_PREVIEW_LINK else ""
+
     welcome_text = (
         f"{em_crw} <b>{PRODUCT_NAME} — VIP HUB</b> {em_dia}\n"
         f"<i>স্বাগতম, {html.escape(user.first_name or 'VIP Member')}! এক্সক্লুসিভ কোর্স ভল্ট ও প্রিমিয়াম হাব।</i>\n\n"
@@ -678,17 +680,20 @@ async def render_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"{em_chk} <b>Service Status:</b> <code>{status_text}</code>\n"
         f"{em_zap} <b>Delivery:</b> <code>Anti-Leak 1-Time Invite Links</code>\n"
         f"{box_border}\n\n"
-        f"🏛️ <b>VIP Vault Services:</b>\n"
+        f"🏛️ <b>VIP Vault Services & Benefits:</b>\n"
         f"• {em_crs} <b>Courses:</b> লাইফটাইম ক্লাউড ড্রাইভ ও সিক্রেট মেথডস\n"
-        f"• {em_chn} <b>VIP Channels:</b> প্রতিদিন নতুন কোর্স রিলিজ ও রিসোর্স\n"
+        f"• {em_chn} <b>VIP Channels:</b> প্রতিদিন নতুন কোর্স রিলিজ ও সফটওয়্যার\n"
         f"• {em_grp} <b>VIP Groups:</b> সিক্রেট ডিসকাশন ও স্টুডেন্ট নেটওয়ার্ক\n"
-        f"• {em_sup} <b>Live Support:</b> ২৪/৭ ডিরেক্ট অ্যাডমিন অ্যাসিস্ট্যান্স\n\n"
+        f"• {em_sup} <b>Live Support:</b> ২৪/৭ ডিরেক্ট অ্যাডমিন অ্যাসিস্ট্যান্স\n"
+        f"{preview_line}\n"
         f"👉 <i>নিচের বাটনগুলো ব্যবহার করে প্ল্যান ব্রাউজ বা অ্যাকাউন্ট পরিচালনা করুন:</i>"
     )
 
     keyboard = [
         [InlineKeyboardButton("👑 VIP Plans & Pricing", callback_data="plans_menu")],
     ]
+    if VIP_PREVIEW_LINK:
+        keyboard.append([InlineKeyboardButton("👁️ Free VIP Preview Channel 🎬", url=VIP_PREVIEW_LINK)])
     if is_vip:
         keyboard.append([InlineKeyboardButton("🔗 Access VIP Channels & Groups", callback_data="get_my_links")])
 
@@ -991,6 +996,82 @@ async def send_official_channel_info(update: Update, context: ContextTypes.DEFAU
         await update.message.reply_text(text, parse_mode="HTML", reply_markup=markup, disable_web_page_preview=True)
 
 
+async def broadcast_vip_join(
+    bot: Bot,
+    buyer_id: int,
+    buyer_username: Optional[str],
+    buyer_name: Optional[str],
+    plan_name: str,
+):
+    """
+    Dispatches a high-converting social-proof announcement when a new VIP member enrolls.
+    Target: Public announcement/preview channel or bot users (if configured).
+    """
+    enabled = db.get_setting("vip_join_broadcast_enabled", "1") == "1"
+    if not enabled:
+        return
+
+    # Mask name for privacy & premium feel
+    clean_name = buyer_name or "VIP Member"
+    parts = clean_name.split()
+    if len(parts) > 1:
+        masked_name = f"{parts[0]} {parts[1][0]}."
+    else:
+        masked_name = clean_name
+
+    handle = f"@{buyer_username}" if buyer_username else "Student"
+
+    text = (
+        f"🔥 <b>NEW VIP MEMBER ENROLLED!</b> 🚀\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"🎉 অভিনন্দন <b>{html.escape(masked_name)}</b> ({handle})!\n"
+        f"📦 <b>এনরোল্ড প্ল্যান:</b> <b>{html.escape(plan_name)}</b>\n"
+        f"💎 <b>স্ট্যাটাস:</b> <code>Full Vault Access Unlocked ✅</code>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        f"🏛️ <b>{PRODUCT_NAME}</b>-এর প্রিমিয়াম কোর্স, সিক্রেট মেথড ও লাইফটাইম রিসোর্সে যুক্ত হতে আপনিও আজই আপনার স্লট নিশ্চিত করুন!\n"
+        f"<i>(বর্তমান অফার মূল্যে জয়েন করতে নিচের বাটনে ট্যাপ করুন)</i>\n"
+    )
+    if VIP_PREVIEW_LINK:
+        text += f"\n👉 <i>কোর্স ভল্ট দেখতে প্রিভিউ চ্যানেল ভিজিট করুন:</i>\n"
+
+    buttons = [
+        [InlineKeyboardButton("👑 Get VIP Access / Buy Now", callback_data="plans_menu")],
+    ]
+    if VIP_PREVIEW_LINK:
+        buttons.append([InlineKeyboardButton("👁️ Free VIP Preview Channel 🎬", url=VIP_PREVIEW_LINK)])
+
+    markup = InlineKeyboardMarkup(buttons)
+
+    # 1. Post to Announcement / Force Channel if configured
+    target_ch = FORCE_CHANNEL_ID or db.get_setting("vip_broadcast_channel_id")
+    if target_ch:
+        try:
+            await bot.send_message(
+                chat_id=target_ch,
+                text=text,
+                parse_mode="HTML",
+                reply_markup=markup,
+                disable_web_page_preview=True,
+            )
+            logger.info(f"VIP Join Broadcast posted to channel {target_ch}")
+        except Exception as e:
+            logger.warning(f"Could not post VIP join broadcast to channel {target_ch}: {e}")
+
+    # 2. Also log to Log Channel if configured
+    log_ch = CONFIG.get("log_channel_id")
+    if log_ch and str(log_ch) != str(target_ch):
+        try:
+            await bot.send_message(
+                chat_id=log_ch,
+                text=text,
+                parse_mode="HTML",
+                reply_markup=markup,
+                disable_web_page_preview=True,
+            )
+        except Exception:
+            pass
+
+
 async def handle_buy_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, plan_key: str):
     query = update.callback_query
     try:
@@ -1034,8 +1115,10 @@ async def handle_buy_plan(update: Update, context: ContextTypes.DEFAULT_TYPE, pl
 
     keyboard = [
         [InlineKeyboardButton("✍️ Submit Trx ID / Proof", callback_data=f"submit_trx_{plan_key}")],
-        [InlineKeyboardButton("🔙 Back to Plans", callback_data="plans_menu")],
     ]
+    if VIP_PREVIEW_LINK:
+        keyboard.append([InlineKeyboardButton("👁️ View VIP Preview Channel 🎬", url=VIP_PREVIEW_LINK)])
+    keyboard.append([InlineKeyboardButton("🔙 Back to Plans", callback_data="plans_menu")])
     await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
 
 
@@ -1675,6 +1758,27 @@ async def handle_user_text_message(update: Update, context: ContextTypes.DEFAULT
         )
         return
 
+    # Admin Awaiting Reminder Stages Input
+    if action == "admin_awaiting_reminder_stages":
+        nums = [int(n) for n in re.findall(r"\d+", msg_text) if int(n) > 0]
+        USER_STATES.pop(user_id, None)
+        if not nums:
+            await update.message.reply_text("❌ অবৈধ ইনপুট! সংখ্যা লিখুন (যেমন: 24 12 1)।")
+            return
+        nums = sorted(list(set(nums)), reverse=True)
+        new_val = ",".join(str(n) for n in nums)
+        db.set_setting("reminder_stages", new_val)
+        db.log_activity(user_id, "REMINDER_STAGES_UPDATED", new_val)
+        await update.message.reply_text(
+            f"✅ <b>Reminder Schedule Updated!</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"⏱️ নতুন ওয়ার্নিং শিডিউল: <b>{new_val} ঘণ্টা আগে</b>\n"
+            f"💾 <i>ডাটাবেজে সেভ হয়েছে এবং শিডিউলার এই সময়ে স্বয়ংক্রিয় নোটিশ পাঠাবে।</i>",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⚙️ Admin Dashboard", callback_data="admin_dashboard")]]),
+        )
+        return
+
     # 12. User Submitting Payout Request Info
     if action == "aff_awaiting_payout_info":
         text_in = update.message.text.strip()
@@ -1892,9 +1996,11 @@ async def render_admin_dashboard(update: Update, context: ContextTypes.DEFAULT_T
         ],
         [
             InlineKeyboardButton("📢 Broadcast DM", callback_data="adm_action_broadcast"),
+            InlineKeyboardButton(f"🔥 Join Broadcast ({'ON' if db.get_setting('vip_join_broadcast_enabled', '1') == '1' else 'OFF'})", callback_data="adm_toggle_join_bc"),
         ],
         [
             InlineKeyboardButton(f"👁️ VIP Preview Link ({'Active' if VIP_PREVIEW_LINK else 'None'})", callback_data="adm_action_preview"),
+            InlineKeyboardButton(f"⏱️ Reminders ({db.get_setting('reminder_stages', '24,12,1')}h)", callback_data="adm_action_reminders"),
         ],
         [
             InlineKeyboardButton("📋 Live System Logs & Diagnostics", callback_data="adm_action_logs"),
@@ -1953,6 +2059,15 @@ async def cmd_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # Deliver 1-time links to user
         await deliver_welcome_access(context.bot, target_id, label, sub["expires_at"], is_lifetime)
+        asyncio.create_task(
+            broadcast_vip_join(
+                bot=context.bot,
+                buyer_id=target_id,
+                buyer_username=None,
+                buyer_name="VIP Member",
+                plan_name=label,
+            )
+        )
 
         await update.message.reply_text(
             f"✅ <b>Member Added Successfully!</b>\n"
@@ -2497,6 +2612,44 @@ async def cmd_setdollar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ এরর: {e}")
 
 
+async def cmd_setreminders(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Usage: /setreminders 24 12 1"""
+    if not is_admin(update.effective_user.id):
+        return
+    args = context.args
+    if not args:
+        curr = db.get_setting("reminder_stages", "24,12,1")
+        await update.message.reply_text(
+            f"⏱️ <b>CURRENT EXPIRATION REMINDER SCHEDULE:</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"• <b>সক্রিয় স্টেজসমূহ:</b> <code>{curr} ঘণ্টা আগে</code>\n\n"
+            f"👉 নতুন স্টেজ সেট করতে লিখুন (স্পেস দিয়ে ঘণ্টার সংখ্যা):\n"
+            f"<code>/setreminders 24 12 1</code>\n"
+            f"<i>(উদাহরণ: ২৪ ঘণ্টা, ১২ ঘণ্টা এবং ১ ঘণ্টা আগে অটোমেটিক ওয়ার্নিং যাবে)</i>",
+            parse_mode="HTML"
+        )
+        return
+
+    try:
+        nums = [int(n) for n in re.findall(r"\d+", " ".join(args)) if int(n) > 0]
+        if not nums:
+            await update.message.reply_text("❌ অবৈধ স্টেজ! সংখ্যা লিখুন (যেমন: /setreminders 24 12 1)।")
+            return
+        nums = sorted(list(set(nums)), reverse=True)
+        new_val = ",".join(str(n) for n in nums)
+        db.set_setting("reminder_stages", new_val)
+        db.log_activity(update.effective_user.id, "REMINDER_STAGES_UPDATED", new_val)
+        await update.message.reply_text(
+            f"✅ <b>Reminder Schedule Updated!</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"⏱️ নতুন ওয়ার্নিং শিডিউল: <b>{new_val} ঘণ্টা আগে</b>\n"
+            f"💾 <i>ডাটাবেজে সেভ হয়েছে এবং শিডিউলার এই সময়ে স্বয়ংক্রিয় নোটিশ পাঠাবে।</i>",
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        await update.message.reply_text(f"❌ এরর: {e}")
+
+
 async def cmd_setpreview(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Usage:
       /setpreview <link> [Name]
@@ -2904,6 +3057,15 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         try:
             await deliver_welcome_access(context.bot, req["user_id"], plan["name"], sub["expires_at"], is_lifetime)
             delivery_ok = True
+            asyncio.create_task(
+                broadcast_vip_join(
+                    bot=context.bot,
+                    buyer_id=req["user_id"],
+                    buyer_username=req.get("username"),
+                    buyer_name=req.get("full_name"),
+                    plan_name=plan["name"],
+                )
+            )
         except Exception as e:
             logger.error(f"Failed to deliver links to user {req['user_id']}: {e}")
 
@@ -3346,6 +3508,32 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         save_config()
         await safe_ack("Destination removed!", show_alert=True)
         await render_admin_dashboard(update, context)
+        return
+
+    if data == "adm_toggle_join_bc":
+        cur_bc = db.get_setting("vip_join_broadcast_enabled", "1") == "1"
+        new_bc = "0" if cur_bc else "1"
+        db.set_setting("vip_join_broadcast_enabled", new_bc)
+        db.log_activity(user_id, "JOIN_BROADCAST_TOGGLED", f"Set to {new_bc}")
+        status_label = "ENABLED ✅" if new_bc == "1" else "DISABLED ❌"
+        await safe_ack(f"VIP Join Broadcast is now {status_label}", show_alert=True)
+        await render_admin_dashboard(update, context)
+        return
+
+    if data == "adm_action_reminders":
+        USER_STATES[user_id] = {"action": "admin_awaiting_reminder_stages"}
+        cur_stages = db.get_setting("reminder_stages", "24,12,1")
+        await query.edit_message_text(
+            f"⏱️ <b>SET EXPIRATION REMINDER SCHEDULE</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"বর্তমান শিডিউল: <b>{cur_stages} ঘণ্টা আগে</b>\n\n"
+            f"অটো-কিকের কত কত ঘণ্টা আগে নোটিশ পাঠাতে চান তা স্পেস বা কমা দিয়ে লিখে পাঠান:\n"
+            f"উদাহরণ: <code>24 12 1</code> অথবা <code>48 24 6 1</code>\n\n"
+            f"<i>💡 প্রতিটি স্টেজ ইউজারের কাছে স্বয়ংক্রিয়ভাবে আলাদা আলাদা কাউন্টডাউন ও রিনিউ বাটনসহ পৌঁছাবে।</i>\n\n"
+            f"<i>(বাতিল করতে চাইলে /cancel লিখুন)</i>",
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Cancel / Back", callback_data="admin_dashboard")]]),
+        )
         return
 
     if data == "adm_action_clear_logs":
@@ -4425,6 +4613,7 @@ def main():
     app.add_handler(CommandHandler("setprice", cmd_setprice))
     app.add_handler(CommandHandler("setdollar", cmd_setdollar))
     app.add_handler(CommandHandler("setrate", cmd_setdollar))
+    app.add_handler(CommandHandler("setreminders", cmd_setreminders))
     app.add_handler(CommandHandler("setforcechannel", cmd_setforcechannel))
     app.add_handler(CommandHandler("setpreview", cmd_setpreview))
 

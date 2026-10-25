@@ -8,6 +8,7 @@ Monitors subscriber lifecycles 24/7:
 """
 
 import os
+import html
 import asyncio
 import datetime
 import logging
@@ -57,29 +58,64 @@ class VaultScheduler:
         await self._check_daily_backup()
 
     # =========================================================================
-    # 1. EXPIRATION REMINDERS (24h Alert)
+    # 1. MULTI-STAGE EXPIRATION REMINDERS (e.g. 24h, 12h, 1h Alert)
     # =========================================================================
     async def _process_reminders(self):
-        reminder_hours = self.config.get("reminder_hours_before", 24)
-        due_users = db.get_due_reminders(hours_before=reminder_hours)
+        stages_str = db.get_setting("reminder_stages", "24,12,1")
+        try:
+            stages = [int(s.strip()) for s in stages_str.split(",") if s.strip().isdigit()]
+        except Exception:
+            stages = [24, 12, 1]
 
-        for user in due_users:
+        due_items = db.get_due_stage_reminders(stages=stages)
+
+        for user, stage in due_items:
             user_id = user["user_id"]
             try:
                 expiry_dt = datetime.datetime.fromisoformat(user["expires_at"])
                 formatted_expiry = expiry_dt.strftime("%d %b %Y, %I:%M %p")
 
+                if stage == 1:
+                    badge = "🚨 <b>[ফাইনাল নোটিশ — আর মাত্র ১ ঘণ্টা বাকি!]</b>"
+                    urgency_desc = (
+                        "⏱️ <b>মেয়াদ শেষ হতে বাকি:</b> <code>আর মাত্র ৬০ মিনিট!</code>\n\n"
+                        "🔴 <i>১ ঘণ্টা পূর্ণ হওয়ামাত্রই সিস্টেম রোবট আপনাকে কানেক্টেড সব VIP চ্যানেল ও গ্রুপ থেকে রিমুভ করে দেবে।</i>\n\n"
+                        "⚡ <i>নিরবচ্ছিন্ন এক্সেস রাখতে এখনই রিনিউ বাটনে চাপ দিয়ে পেমেন্ট সম্পন্ন করুন:</i>"
+                    )
+                    btn_text = "👑 1-Click Renew Now"
+                elif stage <= 12:
+                    badge = f"⚠️ <b>[জরুরি সতর্কতা — আর মাত্র {stage} ঘণ্টা বাকি!]</b>"
+                    urgency_desc = (
+                        f"⏳ <b>কাউন্টডাউন:</b> <code>{stage} ঘণ্টার মধ্যে VIP এক্সেস সমাপ্ত হবে</code>\n\n"
+                        "🚨 <i>আজকের মধ্যে রিনিউ না করলে সকল এক্সক্লুসিভ কোর্স ও ডিসকাশন গ্রুপ থেকে আপনাকে স্বয়ংক্রিয়ভাবে রিমুভ করা হবে।</i>\n\n"
+                        "👉 <i>দ্রুত রিনিউ করতে নিচের বাটনে ট্যাপ করুন:</i>"
+                    )
+                    btn_text = "🔄 Quick Renew"
+                else:
+                    badge = f"⏳ <b>[VIP মেম্বারশিপ মেয়াদ সমাপ্তি নোটিশ — {stage} ঘণ্টা বাকি]</b>"
+                    urgency_desc = (
+                        f"⚠️ <i>আপনার সাবস্ক্রিপশনের মেয়াদ আর মাত্র {stage} ঘণ্টা পর শেষ হবে। নির্ধারিত সময়ের পর চ্যানেল ও গ্রুপসমূহ থেকে স্বয়ংক্রিয়ভাবে রিমুভ করা হবে।</i>\n\n"
+                        "👉 <i>নিরবচ্ছিন্ন এক্সেস বজায় রাখতে এখনই রিনিউ সম্পন্ন করুন:</i>"
+                    )
+                    btn_text = "🔄 Renew Subscription"
+
+                safe_name = html.escape(str(user.get("full_name") or user.get("username") or "VIP Member"))
                 text = (
-                    f"⚠️ <b>সাবস্ক্রিপশন মেয়াদ শেষের নোটিশ!</b>\n\n"
-                    f"আপনার <b>{self.product_name}</b> মেম্বারশিপের মেয়াদ আর <b>২৪ ঘণ্টার</b> মধ্যে শেষ হবে।\n\n"
-                    f"📦 <b>প্ল্যান:</b> {user['plan_name']}\n"
-                    f"⏳ <b>মেয়াদ শেষ:</b> <code>{formatted_expiry}</code>\n\n"
-                    f"🚨 <i>নির্ধারিত সময়ে রিনিউ না করলে সবকয়টি VIP চ্যানেল ও গ্রুপ থেকে স্বয়ংক্রিয়ভাবে রিমুভ করা হবে। নিরবচ্ছিন্ন এক্সেস রাখতে এখনই রিনিউ করুন।</i>"
+                    f"{badge}\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"👤 <b>Member:</b> {safe_name} (ID: <code>{user_id}</code>)\n"
+                    f"📦 <b>প্ল্যান:</b> <b>{user['plan_name']}</b>\n"
+                    f"⏳ <b>মেয়াদ শেষ:</b> <code>{formatted_expiry}</code>\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n\n"
+                    f"{urgency_desc}"
                 )
 
                 keyboard = InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔄 Renew Subscription", callback_data="user_renew")],
-                    [InlineKeyboardButton("👤 My Status", callback_data="user_status")]
+                    [InlineKeyboardButton(btn_text, callback_data="user_renew")],
+                    [
+                        InlineKeyboardButton("👤 My Status", callback_data="user_status"),
+                        InlineKeyboardButton("💳 Payment Methods", callback_data="payment_info")
+                    ]
                 ])
 
                 await self.bot.send_message(
@@ -89,13 +125,12 @@ class VaultScheduler:
                     reply_markup=keyboard
                 )
 
-                db.mark_reminder_sent(user_id)
-                logger.info(f"24h Expiry reminder delivered to user {user_id}")
+                db.mark_stage_reminder_sent(user_id, stage)
+                logger.info(f"{stage}h Expiry reminder delivered to user {user_id}")
 
             except Forbidden:
-                # User blocked the bot
                 logger.warning(f"Could not send reminder: User {user_id} has blocked the bot.")
-                db.mark_reminder_sent(user_id)
+                db.mark_stage_reminder_sent(user_id, stage)
             except Exception as e:
                 logger.error(f"Failed to send reminder to {user_id}: {e}")
 
