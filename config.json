@@ -8,16 +8,23 @@
   "force_channel_link": "https://t.me/PAV_CourseEdition",
   "force_channel_name": "Pro Access Vault - Course Edition",
   "product_name": "Pro Access Vault - Course Edition",
-  "vip_preview_link": "",
+  "vip_preview_link": "https://t.me/PAV_CourseEdition/16",
   "vip_preview_name": "VIP Preview & Proof Channel",
-  "channels": [],
+  "channels": [
+    {
+      "id": -1004347116875,
+      "name": "VIP & CHATBOX",
+      "type": "group",
+      "invite_expire_hours": 24
+    }
+  ],
   "plans": {
     "monthly": {
       "key": "monthly",
-      "name": "\ud83d\udcc5 Monthly Access",
+      "name": "📅 Monthly Access",
       "duration_days": 30,
-      "price_bdt": 750,
-      "price_usdt": 8,
+      "price_bdt": 250,
+      "price_usdt": 1.97,
       "is_lifetime": false,
       "features": [
         "Full access to Course Vault",
@@ -25,14 +32,14 @@
         "Weekly Course Updates",
         "30 Days Validity"
       ],
-      "updated_at": "2026-10-24T02:53:36.711305+00:00"
+      "updated_at": "2026-10-25T11:23:40.500943+00:00"
     },
     "yearly": {
       "key": "yearly",
-      "name": "\ud83d\udcc6 Yearly Access",
+      "name": "📆 Yearly Access",
       "duration_days": 365,
-      "price_bdt": 4200,
-      "price_usdt": 42,
+      "price_bdt": 2500,
+      "price_usdt": 19.69,
       "is_lifetime": false,
       "features": [
         "Full access to Course Vault",
@@ -40,14 +47,14 @@
         "All updates for 365 days",
         "Save 58% compared to monthly"
       ],
-      "updated_at": "2026-10-24T02:53:36.712309+00:00"
+      "updated_at": "2026-10-25T11:23:40.502438+00:00"
     },
     "lifetime": {
       "key": "lifetime",
-      "name": "\ud83d\udc51 Lifetime Access",
+      "name": "👑 Lifetime Access",
       "duration_days": 99999,
-      "price_bdt": 8000,
-      "price_usdt": 80,
+      "price_bdt": 5999,
+      "price_usdt": 47.24,
       "is_lifetime": true,
       "features": [
         "Forever unlimited access",
@@ -55,7 +62,7 @@
         "All current + future course topics",
         "Highest VIP priority support"
       ],
-      "updated_at": "2026-10-24T02:53:36.718313+00:00"
+      "updated_at": "2026-10-25T11:23:40.502699+00:00"
     }
   },
   "payment_info": {
