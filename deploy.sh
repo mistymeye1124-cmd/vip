@@ -10,44 +10,11 @@ echo "=========================================================="
 
 # Check if container is running to trigger online atomic backup
 if docker ps --format '{{.Names}}' | grep -q "pro_access_vault_bot"; then
-    echo "[+] Running online atomic backup from active container..."
-    docker exec pro_access_vault_bot python3 -c "
-import asyncio, os, json, datetime
-from database import db
-from telegram import Bot
-
-try:
-    with open('config.json') as f:
-        cfg = json.load(f)
-    token = os.getenv('BOT_TOKEN') or cfg.get('bot_token')
-    admins = cfg.get('admin_ids', [8387415921])
-    backup_file = db.backup_database()
-    now_str = datetime.datetime.now().strftime('%d %b %Y, %I:%M:%S %p')
-    bot = Bot(token)
-    for aid in admins:
-        try:
-            with open(backup_file, 'rb') as bf:
-                asyncio.run(bot.send_document(
-                    chat_id=aid,
-                    document=bf,
-                    filename=os.path.basename(backup_file),
-                    caption=(
-                        '🛡️ <b>[PRE-UPDATE SAFETY BACKUP DISPATCHED]</b>\n'
-                        '━━━━━━━━━━━━━━━━━━━━\n'
-                        f'📅 <b>Time:</b> <code>{now_str}</code>\n'
-                        '⚠️ <b>Event:</b> Automatic safety snapshot dispatched BEFORE deploying code update.\n'
-                        '✅ <i>Your database is 100% secured and protected against any accident!</i>'
-                    ),
-                    parse_mode='HTML'
-                ))
-            print(f'✅ Dispatched pre-update backup to Admin {aid}')
-        except Exception as e:
-            print(f'⚠️ Failed to send to {aid}: {e}')
-except Exception as ge:
-    print(f'⚠️ Pre-update backup dispatch error: {ge}')
-" || echo "[-] Container pre-backup script encountered a non-fatal warning."
+    echo "[+] Running online atomic backup via container..."
+    docker exec pro_access_vault_bot python3 backup_dispatcher.py "PRE-UPDATE SAFETY BACKUP" || echo "[-] Container pre-backup script returned non-zero, continuing with local host snapshot."
 else
-    echo "[!] Container is not currently running. Safe to proceed."
+    echo "[!] Container is not currently running. Running host backup if python3 is available..."
+    python3 backup_dispatcher.py "PRE-UPDATE SAFETY BACKUP" || true
 fi
 
 # Physical host backup snapshot
