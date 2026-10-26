@@ -8,7 +8,9 @@ services:
     volumes:
       - ./.env:/app/.env
       - ./config.json:/app/config.json
-      - ./vault_database.db:/app/vault_database.db
-      - ./backups:/app/backups
+      - /var/lib/vault_bot_storage/data:/app/data
     environment:
       - TZ=Asia/Dhaka
+      - DATABASE_PATH=/app/data/vault.db
+      - BACKUP_DIR=/app/data/backups
+

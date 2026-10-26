@@ -19,14 +19,16 @@ else
     python3 backup_dispatcher.py "PRE-UPDATE SAFETY BACKUP" || true
 fi
 
-# Physical host backup snapshot
+# Immortal host storage initialization & backup snapshot
 mkdir -p backups
-if [ -d "vault_database.db" ] && [ -f "vault_database.db/vault.db" ]; then
+mkdir -p /var/lib/vault_bot_storage/data/backups 2>/dev/null || true
+if [ -f "/var/lib/vault_bot_storage/data/vault.db" ]; then
+    cp -v "/var/lib/vault_bot_storage/data/vault.db" "backups/host_pre_update_$(date +%Y%m%d_%H%M%S).db" || true
+    cp -v "/var/lib/vault_bot_storage/data/vault.db" "/var/lib/vault_bot_storage/data/backups/immortal_pre_update_$(date +%Y%m%d_%H%M%S).db" || true
+elif [ -d "vault_database.db" ] && [ -f "vault_database.db/vault.db" ]; then
     cp -v "vault_database.db/vault.db" "backups/host_pre_update_$(date +%Y%m%d_%H%M%S).db"
 elif [ -f "vault_database.db" ]; then
     cp -v "vault_database.db" "backups/host_pre_update_$(date +%Y%m%d_%H%M%S).db"
-else
-    touch vault_database.db
 fi
 
 echo "=========================================================="

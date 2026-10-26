@@ -22,8 +22,14 @@ BASE_DIR = Path(__file__).resolve().parent
 
 class Database:
     def __init__(self, db_path: Optional[str] = None, backup_dir: Optional[str] = None):
+        env_db = os.getenv("DATABASE_PATH")
         if db_path is None:
-            self.db_path = BASE_DIR / "vault_database.db"
+            if env_db:
+                self.db_path = Path(env_db)
+            elif Path("/app/data").is_dir():
+                self.db_path = Path("/app/data/vault.db")
+            else:
+                self.db_path = BASE_DIR / "vault_database.db"
         else:
             p = Path(db_path)
             self.db_path = p if p.is_absolute() else (BASE_DIR / p)
@@ -32,13 +38,21 @@ class Database:
             # If Docker volume mounted non-existent file as directory, store db inside
             self.db_path = self.db_path / "vault.db"
 
+        env_backup = os.getenv("BACKUP_DIR")
         if backup_dir is None:
-            self.backup_dir = BASE_DIR / "backups"
+            if env_backup:
+                self.backup_dir = Path(env_backup)
+            elif Path("/app/data/backups").is_dir() or Path("/app/data").is_dir():
+                self.backup_dir = Path("/app/data/backups")
+            else:
+                self.backup_dir = BASE_DIR / "backups"
         else:
             p = Path(backup_dir)
             self.backup_dir = p if p.is_absolute() else (BASE_DIR / p)
 
         self.backup_dir.mkdir(parents=True, exist_ok=True)
+        if self.db_path.parent:
+            self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
     def _get_connection(self) -> sqlite3.Connection:
