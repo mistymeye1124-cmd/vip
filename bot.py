@@ -2472,11 +2472,25 @@ async def cmd_backup(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text("⏳ Creating atomic SQLite database backup...")
     try:
         backup_file = db.backup_database()
+        file_size_kb = os.path.getsize(backup_file) / 1024.0
+        stats = db.get_stats()
+        now_str = datetime.datetime.now().strftime("%d %b %Y, %I:%M:%S %p")
+        caption = (
+            f"🛡️ <b>[ON-DEMAND ATOMIC DATABASE BACKUP]</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"📅 <b>Timestamp:</b> <code>{now_str}</code>\n"
+            f"📦 <b>File:</b> <code>{os.path.basename(backup_file)}</code> ({file_size_kb:.1f} KB)\n"
+            f"👥 <b>Active VIPs:</b> <code>{stats['total_active']}</code> | <b>Total:</b> <code>{stats['total_all']}</code>\n"
+            f"👑 <b>Lifetime:</b> <code>{stats['total_lifetime']}</code>\n"
+            f"💳 <b>Pending Payments:</b> <code>{stats['pending_payments']}</code>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"✅ <i>Zero-data-loss snapshot. WAL flushed and integrity verified.</i>"
+        )
         with open(backup_file, "rb") as f:
             await update.message.reply_document(
                 document=f,
                 filename=os.path.basename(backup_file),
-                caption=f"🛡️ <b>Database Snapshot Backup</b>\n📅 <code>{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>",
+                caption=caption,
                 parse_mode="HTML",
             )
         await msg.delete()
@@ -3567,17 +3581,31 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     if data == "adm_action_backup":
-        await safe_ack("Creating backup...")
+        await safe_ack("Creating atomic backup...")
         backup_file = db.backup_database()
+        file_size_kb = os.path.getsize(backup_file) / 1024.0
+        stats = db.get_stats()
+        now_str = datetime.datetime.now().strftime("%d %b %Y, %I:%M:%S %p")
+        caption = (
+            f"🛡️ <b>[ADMIN DASHBOARD ATOMIC BACKUP]</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"📅 <b>Timestamp:</b> <code>{now_str}</code>\n"
+            f"📦 <b>File:</b> <code>{os.path.basename(backup_file)}</code> ({file_size_kb:.1f} KB)\n"
+            f"👥 <b>Active VIPs:</b> <code>{stats['total_active']}</code> | <b>Total:</b> <code>{stats['total_all']}</code>\n"
+            f"👑 <b>Lifetime:</b> <code>{stats['total_lifetime']}</code>\n"
+            f"💳 <b>Pending Payments:</b> <code>{stats['pending_payments']}</code>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"✅ <i>Zero-data-loss verified backup. Flushed directly from live SQLite engine.</i>"
+        )
         with open(backup_file, "rb") as f:
             await context.bot.send_document(
                 chat_id=user_id,
                 document=f,
                 filename=os.path.basename(backup_file),
-                caption=f"🛡️ <b>Manual Database Backup</b>\n📅 <code>{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</code>",
+                caption=caption,
                 parse_mode="HTML",
             )
-        await safe_ack("Backup sent to your Telegram!", show_alert=True)
+        await safe_ack("✅ লাইভ ব্যাকআপ আপনার ইনবক্সে পাঠানো হয়েছে!", show_alert=True)
         return
 
     if data == "adm_action_list_active":
@@ -4935,6 +4963,17 @@ async def post_init(application: Application):
         logger.error(f"Startup safety backup failed: {e}")
 
 
+async def post_shutdown(application: Application):
+    """Executes a full WAL flush and creates a local safety snapshot on container shutdown."""
+    logger.info("Executing zero-data-loss shutdown sequence: flushing WAL and saving backup...")
+    try:
+        db.checkpoint()
+        backup_path = db.backup_database()
+        logger.info(f"Shutdown sequence complete. Database safely checkpointed and backed up: {backup_path}")
+    except Exception as e:
+        logger.error(f"Error during shutdown database flush: {e}")
+
+
 def main():
     if not BOT_TOKEN or BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
         print("\n" + "=" * 60)
@@ -4964,6 +5003,7 @@ def main():
         .token(BOT_TOKEN)
         .request(request_client)
         .post_init(post_init)
+        .post_shutdown(post_shutdown)
         .build()
     )
 

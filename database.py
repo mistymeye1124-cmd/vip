@@ -44,14 +44,32 @@ class Database:
     def _get_connection(self) -> sqlite3.Connection:
         conn = sqlite3.connect(str(self.db_path), timeout=30.0)
         conn.row_factory = sqlite3.Row
-        # Enable WAL mode for high concurrency and crash resilience
+        # Enable WAL mode with FULL sync for maximum durability against VPS power cuts
         conn.execute("PRAGMA journal_mode=WAL;")
-        conn.execute("PRAGMA synchronous=NORMAL;")
+        conn.execute("PRAGMA synchronous=FULL;")
         conn.execute("PRAGMA foreign_keys=ON;")
         return conn
 
+    def checkpoint(self):
+        """Flushes all pending WAL frames into the main database file immediately."""
+        try:
+            with sqlite3.connect(str(self.db_path), timeout=30.0) as conn:
+                conn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+        except Exception as e:
+            logger.error(f"Error during SQLite WAL checkpoint: {e}")
+
     def _init_db(self):
         """Initializes tables and indexes with strict data integrity rules."""
+        # 0. Startup Integrity Verification
+        try:
+            with self._get_connection() as conn:
+                chk = conn.execute("PRAGMA integrity_check;").fetchone()
+                if chk and chk[0] == "ok":
+                    logger.info("Database integrity verified: OK (Zero corruption detected).")
+                else:
+                    logger.critical(f"⚠️ DATABASE INTEGRITY ALERT: {chk}")
+        except Exception as e:
+            logger.error(f"Database integrity check warning: {e}")
         with self._get_connection() as conn:
             # 1. Subscribers Table
             conn.execute("""
@@ -237,6 +255,7 @@ class Database:
         Creates an online atomic SQLite backup using sqlite3.Connection.backup().
         Can be run safely even while the bot is active and writing.
         """
+        self.checkpoint()
         self.backup_dir.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         backup_filename = self.backup_dir / f"vault_backup_{timestamp}.db"
@@ -245,10 +264,10 @@ class Database:
             with sqlite3.connect(str(backup_filename)) as dst_conn:
                 src_conn.backup(dst_conn, pages=100)
 
-        # Retain only the last 15 backups to save space
+        # Retain only the last 30 backups to save space while ensuring long recovery horizon
         all_backups = sorted(self.backup_dir.glob("vault_backup_*.db"), key=os.path.getmtime)
-        if len(all_backups) > 15:
-            for old_file in all_backups[:-15]:
+        if len(all_backups) > 30:
+            for old_file in all_backups[:-30]:
                 try:
                     old_file.unlink()
                 except Exception:
@@ -322,6 +341,7 @@ class Database:
                 ),
             )
             conn.commit()
+        self.checkpoint()
 
         self.log_activity(
             user_id,
@@ -379,6 +399,7 @@ class Database:
                 (plan_key, plan_name, new_expires_iso, is_lifetime_int, user_id),
             )
             conn.commit()
+        self.checkpoint()
 
         self.log_activity(
             user_id,
@@ -521,6 +542,7 @@ class Database:
                 (user_id,),
             )
             conn.commit()
+        self.checkpoint()
         self.log_activity(user_id, "AUTO_KICK", f"Removed from channels | Reason: {reason}")
 
     def manual_kick_subscriber(self, user_id: int) -> bool:
@@ -531,6 +553,7 @@ class Database:
             )
             conn.commit()
             success = cursor.rowcount > 0
+        self.checkpoint()
 
         if success:
             self.log_activity(user_id, "MANUAL_KICK", "Kicked manually by admin")
@@ -656,6 +679,7 @@ class Database:
             )
             conn.commit()
             req_id = cursor.lastrowid
+        self.checkpoint()
 
         self.log_activity(
             user_id,
@@ -679,6 +703,7 @@ class Database:
                 (status, now, request_id),
             )
             conn.commit()
+        self.checkpoint()
 
     # =========================================================================
     # AUDIT LOGGING

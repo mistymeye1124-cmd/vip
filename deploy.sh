@@ -10,6 +10,8 @@ echo "=========================================================="
 
 # Check if container is running to trigger online atomic backup
 if docker ps --format '{{.Names}}' | grep -q "pro_access_vault_bot"; then
+    echo "[+] Flushing database WAL to disk via container..."
+    docker exec pro_access_vault_bot python3 -c "from database import db; db.checkpoint()" || true
     echo "[+] Running online atomic backup via container..."
     docker exec pro_access_vault_bot python3 backup_dispatcher.py "PRE-UPDATE SAFETY BACKUP" || echo "[-] Container pre-backup script returned non-zero, continuing with local host snapshot."
 else
@@ -23,6 +25,8 @@ if [ -d "vault_database.db" ] && [ -f "vault_database.db/vault.db" ]; then
     cp -v "vault_database.db/vault.db" "backups/host_pre_update_$(date +%Y%m%d_%H%M%S).db"
 elif [ -f "vault_database.db" ]; then
     cp -v "vault_database.db" "backups/host_pre_update_$(date +%Y%m%d_%H%M%S).db"
+else
+    touch vault_database.db
 fi
 
 echo "=========================================================="
