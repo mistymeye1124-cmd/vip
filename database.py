@@ -301,6 +301,7 @@ class Database:
                     full_name = excluded.full_name,
                     plan_key = excluded.plan_key,
                     plan_name = excluded.plan_name,
+                    joined_at = excluded.joined_at,
                     expires_at = excluded.expires_at,
                     is_lifetime = excluded.is_lifetime,
                     reminder_sent = 0,

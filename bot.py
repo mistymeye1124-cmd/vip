@@ -496,8 +496,8 @@ async def generate_single_use_links(bot, user_id: int) -> List[Dict[str, Any]]:
         ch_name = ch.get("name", str(ch_id))
         ch_type = ch.get("type", "channel")
 
-        # Anti-Abuse: If user is already inside this channel, DO NOT generate a new link!
-        if await is_user_in_chat(bot, ch_id, user_id):
+        # Anti-Abuse: If regular user is already inside this channel, DO NOT generate a new link!
+        if not is_admin(user_id) and await is_user_in_chat(bot, ch_id, user_id):
             logger.info(f"User {user_id} is already inside {ch_name} ({ch_id}). Skipping link creation.")
             continue
 
@@ -539,36 +539,40 @@ async def generate_single_use_links(bot, user_id: int) -> List[Dict[str, Any]]:
 
 async def deliver_welcome_access(bot, user_id: int, plan_name: str, expires_at_iso: str, is_lifetime: bool):
     """Sends the rich welcome card with 1-time channel and group buttons to the user."""
-    # Check if user is already inside all channels
-    all_joined, unjoined = await is_user_in_all_channels(bot, user_id)
-    if all_joined and CHANNELS:
-        already_text = (
-            f"🔒 <b>VIP এক্সেস সক্রিয় ও লকড</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"✅ <b>আপনি ইতিমধ্যেই আমাদের সব VIP চ্যানেল ও গ্রুপে যুক্ত আছেন!</b>\n\n"
-            f"🛡️ <b>নিরাপত্তা সতর্কতা:</b>\n"
-            f"লিংক কপি, লিকেজ বা অন্য কারো সাথে শেয়ারিং সম্পূর্ণ নিষিদ্ধ থাকায় নতুন কোনো ইনভাইট লিংক তৈরি হবে না।\n\n"
-            f"💡 আপনি সরাসরি টেলিগ্রামের চ্যাট লিস্ট থেকে আপনার যুক্ত থাকা VIP গ্রুপ ও চ্যানেলে প্রবেশ করতে পারেন।"
-        )
-        markup = InlineKeyboardMarkup([
-            [InlineKeyboardButton("👤 My Subscription Status", callback_data="user_status")],
-            [InlineKeyboardButton("💬 Contact Support", url="https://t.me/proaccessteam")],
-        ])
-        await bot.send_message(
-            chat_id=user_id,
-            text=already_text,
-            parse_mode="HTML",
-            reply_markup=markup,
-        )
-        return
+    # Check if user is already inside all channels (Admins exempt for testing)
+    if not is_admin(user_id):
+        all_joined, unjoined = await is_user_in_all_channels(bot, user_id)
+        if all_joined and CHANNELS:
+            already_text = (
+                f"🔒 <b>VIP এক্সেস সক্রিয় ও সুরক্ষিত</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"✅ <b>আপনি ইতিমধ্যেই আমাদের সব VIP চ্যানেল ও গ্রুপে যুক্ত আছেন!</b>\n\n"
+                f"🛡️ <b>নিরাপত্তা সতর্কতা:</b>\n"
+                f"লিংক কপি, লিকেজ বা অন্য কারো সাথে শেয়ারিং সম্পূর্ণ নিষিদ্ধ থাকায় নতুন কোনো ইনভাইট লিংক তৈরি হবে না।\n\n"
+                f"💡 আপনি সরাসরি টেলিগ্রামের চ্যাট লিস্ট থেকে আপনার যুক্ত থাকা VIP গ্রুপ ও চ্যানেলে প্রবেশ করতে পারেন।"
+            )
+            markup = InlineKeyboardMarkup([
+                [InlineKeyboardButton("👤 My Subscription Status", callback_data="user_status")],
+                [InlineKeyboardButton("💬 Contact Support", url="https://t.me/proaccessteam")],
+            ])
+            await bot.send_message(
+                chat_id=user_id,
+                text=already_text,
+                parse_mode="HTML",
+                reply_markup=markup,
+            )
+            return
 
     links = await generate_single_use_links(bot, user_id)
 
     if is_lifetime:
         duration_text = "👑 <b>Lifetime Unlimited Access</b> (চিরস্থায়ী)"
     else:
-        dt = datetime.datetime.fromisoformat(expires_at_iso)
-        duration_text = f"⏳ <b>মেয়াদ:</b> <code>{dt.strftime('%d %b %Y, %I:%M %p (UTC)')}</code>"
+        try:
+            dt = datetime.datetime.fromisoformat(expires_at_iso)
+            duration_text = f"⏳ <b>মেয়াদ:</b> <code>{dt.strftime('%d %b %Y, %I:%M %p (UTC)')}</code>"
+        except Exception:
+            duration_text = f"⏳ <b>মেয়াদ:</b> <code>{expires_at_iso}</code>"
 
     if not links:
         text = (
@@ -934,7 +938,7 @@ async def cmd_myplan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     all_joined, _ = await is_user_in_all_channels(context.bot, user_id)
-    if all_joined and CHANNELS:
+    if not is_admin(user_id) and all_joined and CHANNELS:
         link_btn = InlineKeyboardButton("✅ VIP Channels (Already Joined)", callback_data="already_joined_alert")
     else:
         link_btn = InlineKeyboardButton("🔗 Access VIP Channels & Groups", callback_data="get_my_links")
@@ -964,57 +968,36 @@ async def cmd_links(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         return
 
-    # Check if user is already inside all channels
-    all_joined, _ = await is_user_in_all_channels(context.bot, user_id)
-    if all_joined and CHANNELS:
-        already_text = (
-            f"🔒 <b>VIP এক্সেস সক্রিয় ও লকড</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"✅ <b>আপনি ইতিমধ্যেই আমাদের সব VIP চ্যানেল ও গ্রুপে যুক্ত আছেন!</b>\n\n"
-            f"🛡️ <b>নিরাপত্তা সতর্কতা:</b>\n"
-            f"লিংক কপি বা অন্য কারো সাথে শেয়ারিং সম্পূর্ণ নিষিদ্ধ থাকায় নতুন কোনো ইনভাইট লিংক তৈরি হবে না। সরাসরি আপনার চ্যাট লিস্ট থেকে গ্রুপে প্রবেশ করুন।"
-        )
-        markup = InlineKeyboardMarkup([
-            [InlineKeyboardButton("👤 My Subscription Status", callback_data="user_status")],
-            [InlineKeyboardButton("💬 Contact Support", url="https://t.me/proaccessteam")],
-        ])
-        if update.callback_query:
-            await update.callback_query.answer("আপনি ইতিমধ্যে যুক্ত আছেন! নতুন লিংক লক করা হয়েছে।", show_alert=True)
-            if update.callback_query.message:
-                try:
-                    await update.callback_query.edit_message_text(already_text, parse_mode="HTML", reply_markup=markup)
-                except Exception:
-                    await context.bot.send_message(chat_id=user_id, text=already_text, parse_mode="HTML", reply_markup=markup)
-        elif update.message:
-            await update.message.reply_text(already_text, parse_mode="HTML", reply_markup=markup)
-        return
+    # Check if user is already inside all channels (Admins exempt for testing)
+    if not is_admin(user_id):
+        all_joined, _ = await is_user_in_all_channels(context.bot, user_id)
+        if all_joined and CHANNELS:
+            already_text = (
+                f"🔒 <b>VIP এক্সেস সক্রিয় ও সুরক্ষিত</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"✅ <b>আপনি ইতিমধ্যেই আমাদের সব VIP চ্যানেল ও গ্রুপে যুক্ত আছেন!</b>\n\n"
+                f"🛡️ <b>নিরাপত্তা সতর্কতা:</b>\n"
+                f"লিংক কপি বা অন্য কারো সাথে শেয়ারিং সম্পূর্ণ নিষিদ্ধ থাকায় নতুন কোনো ইনভাইট লিংক তৈরি হবে না। সরাসরি আপনার চ্যাট লিস্ট থেকে গ্রুপে প্রবেশ করুন।"
+            )
+            markup = InlineKeyboardMarkup([
+                [InlineKeyboardButton("👤 My Subscription Status", callback_data="user_status")],
+                [InlineKeyboardButton("💬 Contact Support", url="https://t.me/proaccessteam")],
+            ])
+            if update.callback_query:
+                await update.callback_query.answer("আপনি ইতিমধ্যে যুক্ত আছেন! লিংক শেয়ারিং লক করা হয়েছে।", show_alert=True)
+                if update.callback_query.message:
+                    try:
+                        await update.callback_query.edit_message_text(already_text, parse_mode="HTML", reply_markup=markup)
+                    except Exception:
+                        await context.bot.send_message(chat_id=user_id, text=already_text, parse_mode="HTML", reply_markup=markup)
+            elif update.message:
+                await update.message.reply_text(already_text, parse_mode="HTML", reply_markup=markup)
+            return
 
-    # If user hasn't joined, check if links were already delivered for this billing cycle
-    delivered_key = f"links_delivered_{user_id}_{sub.get('joined_at', '')}"
-    if db.get_setting(delivered_key) == "1":
-        warn_text = (
-            f"⚠️ <b>এক্সেস লিংক ইতিমধ্যে পাঠানো হয়েছে</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"আপনার অ্যাকাউন্টের জন্য ওয়ান-টাইম এক্সেস লিংক পূর্বেই পাঠানো হয়েছে।\n\n"
-            f"📌 প্রতিটি লিংক মাত্র <b>১ বার ব্যবহারযোগ্য</b>। যদি আপনি কোনো কারণে লিংক হারিয়ে থাকেন বা যুক্ত হতে সমস্যা হয়, তবে অনুগ্রহ করে সরাসরি অ্যাডমিন সাপোর্টে যোগাযোগ করুন।"
-        )
-        markup = InlineKeyboardMarkup([
-            [InlineKeyboardButton("👤 My Subscription Status", callback_data="user_status")],
-            [InlineKeyboardButton("💬 Contact Admin Support", url="https://t.me/proaccessteam")],
-        ])
-        if update.callback_query:
-            await update.callback_query.answer("লিংক ইতিমধ্যে প্রদান করা হয়েছে!", show_alert=True)
-            if update.callback_query.message:
-                try:
-                    await update.callback_query.edit_message_text(warn_text, parse_mode="HTML", reply_markup=markup)
-                except Exception:
-                    await context.bot.send_message(chat_id=user_id, text=warn_text, parse_mode="HTML", reply_markup=markup)
-        elif update.message:
-            await update.message.reply_text(warn_text, parse_mode="HTML", reply_markup=markup)
-        return
+    # User has not joined all channels yet! Deliver the 1-time single-use join links with direct buttons
+    if update.callback_query:
+        await update.callback_query.answer("আপনার ওয়ান-টাইম সিকিউর জয়েন লিংক পাঠানো হচ্ছে...")
 
-    # Deliver links and mark as delivered
-    db.set_setting(delivered_key, "1")
     await deliver_welcome_access(
         context.bot,
         user_id,
